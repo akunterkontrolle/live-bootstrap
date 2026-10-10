@@ -36,11 +36,11 @@ build: simple-patch-1.0
 build: mes-0.27.1
 build: tcc-0.9.26
 build: tcc-0.9.27
-define: BUILD_FIWIX = ( KERNEL_BOOTSTRAP == True || BUILD_KERNELS == True )
-build: fiwix-1.5.0-lb1 ( BUILD_FIWIX == True )
-build: lwext4-1.0.0-lb1 ( BUILD_FIWIX == True )
-build: kexec-fiwix-1.0 ( BUILD_FIWIX == True )
-jump: fiwix ( KERNEL_BOOTSTRAP == True )
+define: BUILD_LINUX24 = ( KERNEL_BOOTSTRAP == True || BUILD_KERNELS == True )
+build: linux-2.4.26-lb1 ( BUILD_LINUX24 == True )
+build: lwext4-1.0.0-lb1 ( BUILD_LINUX24 == True )
+build: kexec-linux24-1.0 ( BUILD_LINUX24 == True )
+jump: linux24 ( KERNEL_BOOTSTRAP == True )
 improve: reconfigure ( CONFIGURATOR != True )
 define: JOBS = 1 ( KERNEL_BOOTSTRAP == True )
 build: make-3.82
@@ -54,6 +54,7 @@ build: oyacc-6.6
 build: bash-2.05b
 improve: setup_repo
 improve: update_env
+improve: linux24_build_space ( KERNEL_BOOTSTRAP == True )
 improve: merged_usr
 improve: populate_device_nodes
 define: CONSOLES = ( INTERACTIVE == True && CHROOT == False )
@@ -115,6 +116,7 @@ build: findutils-4.2.33
 build: musl-1.2.5
 build: linux-headers-4.14.341-openela
 build: gcc-4.0.4
+build: payload-import-1.0 ( KERNEL_BOOTSTRAP == True )
 build: util-linux-2.19.1
 build: e2fsprogs-1.45.7
 build: dhcpcd-10.0.1
@@ -132,6 +134,7 @@ jump: break ( INTERNAL_CI == pass1 )
 improve: populate_device_nodes
 jump: linux ( CHROOT == False )
 jump: move_disk ( KERNEL_BOOTSTRAP == True )
+improve: import_payload ( KERNEL_BOOTSTRAP == True )
 improve: finalize_job_count
 improve: finalize_fhs
 improve: open_console ( CONSOLES == True )
