@@ -1,0 +1,8 @@
+	pushl %esi			# push the error code
+	pushl %edx			# push the pt_regs pointer
+	movl $(__KERNEL_DS),%edx
+	movl %edx,%ds
+	movl %edx,%es
+	GET_CURRENT(%ebx)
+	call *%edi
+	addl $8,%esp

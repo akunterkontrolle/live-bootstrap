@@ -1,0 +1,20 @@
+ * change anything.
+ */
+ENTRY(gdt_table)
+	.long 0x00000000, 0x00000000 /* split .quad for early 32-bit TCC */	/* NULL descriptor */
+	.long 0x00000000, 0x00000000 /* split .quad for early 32-bit TCC */	/* not used */
+	.long 0x0000ffff, 0x00cf9a00 /* split .quad for early 32-bit TCC */	/* 0x10 kernel 4GB code at 0x00000000 */
+	.long 0x0000ffff, 0x00cf9200 /* split .quad for early 32-bit TCC */	/* 0x18 kernel 4GB data at 0x00000000 */
+	.long 0x0000ffff, 0x00cffa00 /* split .quad for early 32-bit TCC */	/* 0x23 user   4GB code at 0x00000000 */
+	.long 0x0000ffff, 0x00cff200 /* split .quad for early 32-bit TCC */	/* 0x2b user   4GB data at 0x00000000 */
+	.long 0x00000000, 0x00000000 /* split .quad for early 32-bit TCC */	/* not used */
+	.long 0x00000000, 0x00000000 /* split .quad for early 32-bit TCC */	/* not used */
+	/*
+	 * The APM segments have byte granularity and their bases
+	 * and limits are set at run time.
+	 */
+	.long 0x00000000, 0x00409200 /* split .quad for early 32-bit TCC */	/* 0x40 APM set up for bad BIOS's */
+	.long 0x00000000, 0x00409a00 /* split .quad for early 32-bit TCC */	/* 0x48 APM CS    code */
+	.long 0x00000000, 0x00009a00 /* split .quad for early 32-bit TCC */	/* 0x50 APM CS 16 code (16 bit) */
+	.long 0x00000000, 0x00409200 /* split .quad for early 32-bit TCC */	/* 0x58 APM DS    data */
+	.fill NR_CPUS*4,8,0		/* space for TSS's and LDT's */

@@ -1,0 +1,7 @@
+	return (void*) vaddr;
+}
+
+void __attribute__((regparm(3))) kunmap_high(struct page *page)
+{
+	unsigned long vaddr;
+	unsigned long nr;

@@ -1,0 +1,4 @@
+    if (s1->output_type != TCC_OUTPUT_OBJ)
+        return linux24_layout(s1, phdr, sec_order);
+    file_type = s1->output_type;
+    sh_order_index = 1;

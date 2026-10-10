@@ -1,0 +1,11 @@
+	rfh.dst		= &rt->u.dst;
+	if (!ipc.addr)
+		ipc.addr = rt->rt_dst;
+        if (sk->protinfo.af_inet.hdrincl)
+            getfrag =raw_getrawfrag;
+        else
+            getfrag = raw_getfrag;
+	err = ip_build_xmit(sk, getfrag, &rfh, len, &ipc, rt, msg->msg_flags);
+
+done:
+	if (free)

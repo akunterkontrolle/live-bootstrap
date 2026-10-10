@@ -1,0 +1,7 @@
+ * handle waking up a waiter on the semaphore
+ * - up_read has decremented the active part of the count if we come here
+ */
+struct rw_semaphore *__attribute__((regparm(3))) rwsem_wake(struct rw_semaphore *sem)
+{
+	rwsemtrace(sem,"Entering rwsem_wake");
+

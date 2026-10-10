@@ -1,0 +1,7 @@
+		     "popl %%esi\n\t"					\
+		     :"=m" (prev->thread.esp),"=m" (prev->thread.eip),	\
+		      "=b" (last)					\
+		     :"g" (next->thread.esp),"g" (next->thread.eip),	\
+		      "a" (prev), "d" (next),				\
+		      "b" (prev));					\
+} while (0)

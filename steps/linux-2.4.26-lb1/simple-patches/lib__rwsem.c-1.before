@@ -1,0 +1,7 @@
+/*
+ * wait for the read lock to be granted
+ */
+struct rw_semaphore *rwsem_down_read_failed(struct rw_semaphore *sem)
+{
+	struct rwsem_waiter waiter;
+

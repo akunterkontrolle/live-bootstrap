@@ -1,0 +1,7 @@
+ */
+
+static void FASTCALL(__free_pages_ok (struct page *page, unsigned int order));
+static void __attribute__((regparm(3))) __free_pages_ok (struct page *page, unsigned int order)
+{
+	unsigned long index, page_idx, mask, flags;
+	free_area_t *area;

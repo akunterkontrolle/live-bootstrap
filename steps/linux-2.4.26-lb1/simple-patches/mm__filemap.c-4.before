@@ -1,0 +1,7 @@
+ * and schedules an I/O to read in its contents from disk.
+ */
+static int FASTCALL(page_cache_read(struct file * file, unsigned long offset));
+static int page_cache_read(struct file * file, unsigned long offset)
+{
+	struct address_space *mapping = file->f_dentry->d_inode->i_mapping;
+	struct page **hash = page_hash(mapping, offset);

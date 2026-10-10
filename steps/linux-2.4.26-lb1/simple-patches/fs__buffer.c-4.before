@@ -1,0 +1,7 @@
+ *       obtain a reference to a buffer head within a page.  So we must
+ *	 lock out all of these paths to cleanly toss the page.
+ */
+int try_to_free_buffers(struct page * page, unsigned int gfp_mask)
+{
+	struct buffer_head * tmp, * bh = page->buffers;
+

@@ -1,0 +1,7 @@
+ * If it was already so marked, move it to the active queue and drop
+ * the referenced bit.  Otherwise, just mark it for future action..
+ */
+void __attribute__((regparm(3))) mark_page_accessed(struct page *page)
+{
+	if (!PageActive(page) && PageReferenced(page)) {
+		activate_page(page);

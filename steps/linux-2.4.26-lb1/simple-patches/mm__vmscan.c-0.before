@@ -1,0 +1,7 @@
+}
+
+static int FASTCALL(swap_out(zone_t * classzone));
+static int swap_out(zone_t * classzone)
+{
+	int counter, nr_pages = SWAP_CLUSTER_MAX;
+	struct mm_struct *mm;

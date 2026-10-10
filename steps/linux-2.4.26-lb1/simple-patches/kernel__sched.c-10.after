@@ -1,0 +1,7 @@
+	return timeout;
+}
+
+void __attribute__((regparm(3))) sleep_on(wait_queue_head_t *q)
+{
+	SLEEP_ON_VAR
+	

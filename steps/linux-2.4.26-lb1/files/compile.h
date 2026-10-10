@@ -1,0 +1,6 @@
+#define UTS_VERSION "#1 live-bootstrap"
+#define LINUX_COMPILE_TIME "00:00:00"
+#define LINUX_COMPILE_BY "bootstrap"
+#define LINUX_COMPILE_HOST "bootstrap"
+#define LINUX_COMPILE_DOMAIN "local"
+#define LINUX_COMPILER "early TCC 0.9.27"

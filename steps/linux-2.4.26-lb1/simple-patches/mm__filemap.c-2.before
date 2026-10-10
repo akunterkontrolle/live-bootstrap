@@ -1,0 +1,7 @@
+}
+
+static int FASTCALL(truncate_list_pages(struct list_head *, unsigned long, unsigned *));
+static int truncate_list_pages(struct list_head *head, unsigned long start, unsigned *partial)
+{
+	struct list_head *curr;
+	struct page * page;

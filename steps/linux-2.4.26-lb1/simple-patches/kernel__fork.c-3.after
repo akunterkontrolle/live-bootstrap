@@ -1,0 +1,7 @@
+ * is dropped: either by a lazy thread or by
+ * mmput. Free the page directory and the mm.
+ */
+inline void __attribute__((regparm(3))) __mmdrop(struct mm_struct *mm)
+{
+	BUG_ON(mm == &init_mm);
+	pgd_free(mm->pgd);

@@ -1,0 +1,7 @@
+		wakeup_softirqd(cpu);
+}
+
+void __attribute__((regparm(3))) raise_softirq(unsigned int nr)
+{
+	unsigned long flags;
+

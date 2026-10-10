@@ -1,0 +1,7 @@
+brlock_read_lock_t __brlock_array[NR_CPUS][__BR_IDX_MAX] =
+   { [0 ... NR_CPUS-1] = { [0 ... __BR_IDX_MAX-1] = RW_LOCK_UNLOCKED } };
+
+void __attribute__((regparm(3))) __br_write_lock(enum brlock_indices idx)
+{
+	int i;
+

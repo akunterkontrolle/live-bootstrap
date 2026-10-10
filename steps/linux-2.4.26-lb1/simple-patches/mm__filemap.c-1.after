@@ -1,0 +1,7 @@
+/*
+ * Add a page to the dirty page list.
+ */
+void __attribute__((regparm(3))) set_page_dirty(struct page *page)
+{
+	if (!test_and_set_bit(PG_dirty, &page->flags)) {
+		struct address_space *mapping = page->mapping;

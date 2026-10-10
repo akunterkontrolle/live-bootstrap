@@ -1,0 +1,7 @@
+	}
+}
+
+void activate_page(struct page * page)
+{
+	spin_lock(&pagemap_lru_lock);
+	activate_page_nolock(page);

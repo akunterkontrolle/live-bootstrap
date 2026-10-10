@@ -1,0 +1,7 @@
+ * work, but we opportunistically check whether
+ * we need to get all the locks first..
+ */
+int __attribute__((regparm(3))) can_share_swap_page(struct page *page)
+{
+	int retval = 0;
+

@@ -1,0 +1,7 @@
+}
+EXPORT_SYMBOL(balance_dirty);
+
+inline void __mark_dirty(struct buffer_head *bh)
+{
+	bh->b_flushtime = jiffies + bdf_prm.b_un.age_buffer;
+	refile_buffer(bh);

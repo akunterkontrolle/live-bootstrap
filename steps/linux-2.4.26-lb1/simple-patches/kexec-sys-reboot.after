@@ -1,0 +1,18 @@
+	case 0x45584543:
+	{
+		struct kexec_args args;
+		struct kimage image;
+		int result;
+		if (copy_from_user(&args, arg, sizeof(args))) {
+			unlock_kernel(); return -EFAULT;
+		}
+		kimage_init(&image);
+		result = do_kexec(args.entry, args.nr_segments, args.segments, &image);
+		if (result) {
+			kimage_free(&image); unlock_kernel(); return result;
+		}
+		notifier_call_chain(&reboot_notifier_list, SYS_RESTART, NULL);
+		machine_kexec(&image);
+		kimage_free(&image); unlock_kernel(); return -EIO;
+	}
+	case LINUX_REBOOT_CMD_HALT:

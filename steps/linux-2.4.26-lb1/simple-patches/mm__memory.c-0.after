@@ -1,0 +1,7 @@
+ * On a two-level page table, this ends up actually being entirely
+ * optimized away.
+ */
+pmd_t *__attribute__((regparm(3))) __pmd_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
+{
+	pmd_t *new;
+

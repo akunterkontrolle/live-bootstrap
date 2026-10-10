@@ -1,0 +1,7 @@
+	spin_unlock_irqrestore(&x->wait.lock, flags);
+}
+
+void wait_for_completion(struct completion *x)
+{
+	spin_lock_irq(&x->wait.lock);
+	if (!x->done) {

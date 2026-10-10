@@ -1,0 +1,7 @@
+ */
+static FASTCALL(void reschedule_idle(struct task_struct * p));
+
+static void __attribute__((regparm(3))) reschedule_idle(struct task_struct * p)
+{
+#ifdef CONFIG_SMP
+	int this_cpu = smp_processor_id();

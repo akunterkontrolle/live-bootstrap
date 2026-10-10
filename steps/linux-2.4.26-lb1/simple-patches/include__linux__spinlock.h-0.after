@@ -1,0 +1,7 @@
+
+#include <linux/stringify.h>
+
+#if 0
+#define LOCK_SECTION_NAME			\
+	".text.lock." __stringify(KBUILD_BASENAME)
+

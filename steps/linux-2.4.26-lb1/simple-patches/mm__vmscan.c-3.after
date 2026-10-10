@@ -1,0 +1,7 @@
+}
+
+static int FASTCALL(shrink_caches(zone_t * classzone, unsigned int gfp_mask, int nr_pages, int * failed_swapout));
+static int __attribute__((regparm(3))) shrink_caches(zone_t * classzone, unsigned int gfp_mask, int nr_pages, int * failed_swapout)
+{
+	nr_pages -= kmem_cache_reap(gfp_mask);
+	if (nr_pages <= 0)

@@ -1,0 +1,7 @@
+ * This function is for when the caller already holds
+ * the pagemap_lru_lock.
+ */
+void __lru_cache_del(struct page * page)
+{
+	if (TestClearPageLRU(page)) {
+		if (PageActive(page)) {

@@ -1,0 +1,2 @@
+#include <linux/reboot.h>
+#include <linux/kexec.h>

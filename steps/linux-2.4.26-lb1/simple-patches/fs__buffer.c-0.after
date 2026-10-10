@@ -1,0 +1,7 @@
+	ll_rw_block(WRITE, 1, &bh);
+}
+
+void __attribute__((regparm(3))) unlock_buffer(struct buffer_head *bh)
+{
+	clear_bit(BH_Wait_IO, &bh->b_state);
+	clear_bit(BH_Launder, &bh->b_state);

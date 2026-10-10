@@ -1,0 +1,7 @@
+/*
+ * This function must run with irq disabled!
+ */
+inline void cpu_raise_softirq(unsigned int cpu, unsigned int nr)
+{
+	__cpu_raise_softirq(cpu, nr);
+

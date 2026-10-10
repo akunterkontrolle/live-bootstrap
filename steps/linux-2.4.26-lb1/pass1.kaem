@@ -1,0 +1,593 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 akunterkontrolle
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -ex
+checksum-transcriber sources
+sha256sum -c sources.SHA256SUM
+mkdir build
+cd build
+unbz2 --file ${DISTFILES}/linux-2.4.26.tar.bz2 --output linux-2.4.26.tar
+tcc -D__SIZEOF_LONG_LONG__=8 -static -o ${BINDIR}/linux24-untar ../files/linux24-untar.c
+linux24-untar --file linux-2.4.26.tar
+rm linux-2.4.26.tar
+mkdir tcc-kernel
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/arm-asm.c tcc-kernel/arm-asm.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/arm-gen.c tcc-kernel/arm-gen.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/arm-link.c tcc-kernel/arm-link.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/arm64-gen.c tcc-kernel/arm64-gen.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/arm64-link.c tcc-kernel/arm64-link.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/c67-gen.c tcc-kernel/c67-gen.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/c67-link.c tcc-kernel/c67-link.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/coff.h tcc-kernel/coff.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/config.h tcc-kernel/config.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/conftest.c tcc-kernel/conftest.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/elf.h tcc-kernel/elf.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/i386-asm.c tcc-kernel/i386-asm.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/i386-asm.h tcc-kernel/i386-asm.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/i386-gen.c tcc-kernel/i386-gen.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/i386-link.c tcc-kernel/i386-link.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/i386-tok.h tcc-kernel/i386-tok.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/il-gen.c tcc-kernel/il-gen.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/il-opcodes.h tcc-kernel/il-opcodes.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/libtcc.c tcc-kernel/libtcc.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/libtcc.h tcc-kernel/libtcc.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/stab.h tcc-kernel/stab.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tcc.c tcc-kernel/tcc.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tcc.h tcc-kernel/tcc.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tccasm.c tcc-kernel/tccasm.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tcccoff.c tcc-kernel/tcccoff.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tccelf.c tcc-kernel/tccelf.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tccgen.c tcc-kernel/tccgen.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tcclib.h tcc-kernel/tcclib.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tccpe.c tcc-kernel/tccpe.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tccpp.c tcc-kernel/tccpp.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tccrun.c tcc-kernel/tccrun.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tcctok.h tcc-kernel/tcctok.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/tcctools.c tcc-kernel/tcctools.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/x86_64-asm.h tcc-kernel/x86_64-asm.h
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/x86_64-gen.c tcc-kernel/x86_64-gen.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/x86_64-link.c tcc-kernel/x86_64-link.c
+cp ${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/stab.def tcc-kernel/stab.def
+cp ../files/linux24-layout.h tcc-kernel/linux24-layout.h
+simple-patch tcc-kernel/tccelf.c ../simple-patches/tcc-layout.before ../simple-patches/tcc-layout.after
+simple-patch tcc-kernel/tccelf.c ../simple-patches/tcc-layout-call.before ../simple-patches/tcc-layout-call.after
+cd tcc-kernel
+tcc -D__SIZEOF_LONG_LONG__=8 -static -o ${BINDIR}/linux24-link -D TCC_TARGET_I386=1 -D CONFIG_TCCDIR=\"${LIBDIR}/tcc\" -D CONFIG_TCC_CRTPREFIX=\"${LIBDIR}\" -D CONFIG_TCC_ELFINTERP=\"/mes/loader\" -D CONFIG_TCC_LIBPATHS=\"${LIBDIR}:${LIBDIR}/tcc\" -D CONFIG_TCC_SYSINCLUDEPATHS=\"${PREFIX}/include/mes\" -D TCC_LIBGCC=\"${LIBDIR}/libc.a\" -D CONFIG_TCC_STATIC=1 -D CONFIG_USE_LIBGCC=1 -D TCC_VERSION=\"0.9.27-linux24-link\" -D ONE_SOURCE=1 tcc.c
+cd ../linux-2.4.26
+simple-patch arch/i386/kernel/entry.S ../../simple-patches/arch__i386__kernel__entry.S-0.before ../../simple-patches/arch__i386__kernel__entry.S-0.after
+simple-patch arch/i386/kernel/entry.S ../../simple-patches/arch__i386__kernel__entry.S-1.before ../../simple-patches/arch__i386__kernel__entry.S-1.after
+simple-patch arch/i386/kernel/entry.S ../../simple-patches/arch__i386__kernel__entry.S-2.before ../../simple-patches/arch__i386__kernel__entry.S-2.after
+simple-patch arch/i386/kernel/entry.S ../../simple-patches/arch__i386__kernel__entry.S-3.before ../../simple-patches/arch__i386__kernel__entry.S-3.after
+simple-patch arch/i386/kernel/entry.S ../../simple-patches/arch__i386__kernel__entry.S-4.before ../../simple-patches/arch__i386__kernel__entry.S-4.after
+simple-patch include/linux/sys.h ../../simple-patches/include__linux__sys.h-utimes.before ../../simple-patches/include__linux__sys.h-utimes.after
+simple-patch arch/i386/kernel/head.S ../../simple-patches/arch__i386__kernel__head.S-0.before ../../simple-patches/arch__i386__kernel__head.S-0.after
+simple-patch arch/i386/kernel/head.S ../../simple-patches/arch__i386__kernel__head.S-1.before ../../simple-patches/arch__i386__kernel__head.S-1.after
+simple-patch arch/i386/kernel/head.S ../../simple-patches/arch__i386__kernel__head.S-2.before ../../simple-patches/arch__i386__kernel__head.S-2.after
+simple-patch arch/i386/kernel/head.S ../../simple-patches/arch__i386__kernel__head.S-3.before ../../simple-patches/arch__i386__kernel__head.S-3.after
+simple-patch arch/i386/kernel/i387.c ../../simple-patches/arch__i386__kernel__i387.c-0.before ../../simple-patches/arch__i386__kernel__i387.c-0.after
+simple-patch arch/i386/kernel/process.c ../../simple-patches/arch__i386__kernel__process.c-0.before ../../simple-patches/arch__i386__kernel__process.c-0.after
+simple-patch arch/i386/kernel/process.c ../../simple-patches/arch__i386__kernel__process.c-1.before ../../simple-patches/arch__i386__kernel__process.c-1.after
+simple-patch arch/i386/kernel/process.c ../../simple-patches/arch__i386__kernel__process.c-2.before ../../simple-patches/arch__i386__kernel__process.c-2.after
+simple-patch arch/i386/kernel/setup.c ../../simple-patches/arch__i386__kernel__setup.c-0.before ../../simple-patches/arch__i386__kernel__setup.c-0.after
+simple-patch arch/i386/kernel/signal.c ../../simple-patches/arch__i386__kernel__signal.c-0.before ../../simple-patches/arch__i386__kernel__signal.c-0.after
+simple-patch arch/i386/kernel/vm86.c ../../simple-patches/arch__i386__kernel__vm86.c-0.before ../../simple-patches/arch__i386__kernel__vm86.c-0.after
+simple-patch arch/i386/mm/init.c ../../simple-patches/arch__i386__mm__init.c-0.before ../../simple-patches/arch__i386__mm__init.c-0.after
+simple-patch arch/i386/mm/pageattr.c ../../simple-patches/arch__i386__mm__pageattr.c-0.before ../../simple-patches/arch__i386__mm__pageattr.c-0.after
+simple-patch drivers/ide/ide-lib.c ../../simple-patches/drivers__ide__ide-lib.c-0.before ../../simple-patches/drivers__ide__ide-lib.c-0.after
+simple-patch fs/buffer.c ../../simple-patches/fs__buffer.c-0.before ../../simple-patches/fs__buffer.c-0.after
+simple-patch fs/buffer.c ../../simple-patches/fs__buffer.c-1.before ../../simple-patches/fs__buffer.c-1.after
+simple-patch fs/buffer.c ../../simple-patches/fs__buffer.c-2.before ../../simple-patches/fs__buffer.c-2.after
+simple-patch fs/buffer.c ../../simple-patches/fs__buffer.c-3.before ../../simple-patches/fs__buffer.c-3.after
+simple-patch fs/buffer.c ../../simple-patches/fs__buffer.c-4.before ../../simple-patches/fs__buffer.c-4.after
+simple-patch fs/file_table.c ../../simple-patches/fs__file_table.c-0.before ../../simple-patches/fs__file_table.c-0.after
+simple-patch fs/file_table.c ../../simple-patches/fs__file_table.c-1.before ../../simple-patches/fs__file_table.c-1.after
+simple-patch fs/namei.c ../../simple-patches/fs__namei.c-0.before ../../simple-patches/fs__namei.c-0.after
+simple-patch fs/namei.c ../../simple-patches/fs__namei.c-1.before ../../simple-patches/fs__namei.c-1.after
+simple-patch fs/namei.c ../../simple-patches/fs__namei.c-2.before ../../simple-patches/fs__namei.c-2.after
+simple-patch fs/namei.c ../../simple-patches/fs__namei.c-3.before ../../simple-patches/fs__namei.c-3.after
+simple-patch fs/namei.c ../../simple-patches/fs__namei.c-4.before ../../simple-patches/fs__namei.c-4.after
+simple-patch include/asm-i386/bugs.h ../../simple-patches/include__asm-i386__bugs.h-0.before ../../simple-patches/include__asm-i386__bugs.h-0.after
+simple-patch include/asm-i386/byteorder.h ../../simple-patches/include__asm-i386__byteorder.h-0.before ../../simple-patches/include__asm-i386__byteorder.h-0.after
+simple-patch include/asm-i386/hw_irq.h ../../simple-patches/include__asm-i386__hw_irq.h-0.before ../../simple-patches/include__asm-i386__hw_irq.h-0.after
+simple-patch include/asm-i386/hw_irq.h ../../simple-patches/include__asm-i386__hw_irq.h-1.before ../../simple-patches/include__asm-i386__hw_irq.h-1.after
+simple-patch include/asm-i386/page.h ../../simple-patches/include__asm-i386__page.h-0.before ../../simple-patches/include__asm-i386__page.h-0.after
+simple-patch include/asm-i386/page.h ../../simple-patches/include__asm-i386__page.h-1.before ../../simple-patches/include__asm-i386__page.h-1.after
+simple-patch include/asm-i386/processor.h ../../simple-patches/include__asm-i386__processor.h-0.before ../../simple-patches/include__asm-i386__processor.h-0.after
+simple-patch include/asm-i386/semaphore.h ../../simple-patches/include__asm-i386__semaphore.h-0.before ../../simple-patches/include__asm-i386__semaphore.h-0.after
+simple-patch include/asm-i386/string.h ../../simple-patches/include__asm-i386__string.h-0.before ../../simple-patches/include__asm-i386__string.h-0.after
+simple-patch include/asm-i386/system.h ../../simple-patches/include__asm-i386__system.h-0.before ../../simple-patches/include__asm-i386__system.h-0.after
+simple-patch include/asm-i386/system.h ../../simple-patches/include__asm-i386__system.h-1.before ../../simple-patches/include__asm-i386__system.h-1.after
+simple-patch include/linux/byteorder/generic.h ../../simple-patches/include__linux__byteorder__generic.h-0.before ../../simple-patches/include__linux__byteorder__generic.h-0.after
+simple-patch include/linux/linkage.h ../../simple-patches/include__linux__linkage.h-0.before ../../simple-patches/include__linux__linkage.h-0.after
+simple-patch include/linux/spinlock.h ../../simple-patches/include__linux__spinlock.h-0.before ../../simple-patches/include__linux__spinlock.h-0.after
+simple-patch include/linux/spinlock.h ../../simple-patches/include__linux__spinlock.h-1.before ../../simple-patches/include__linux__spinlock.h-1.after
+simple-patch include/linux/wait.h ../../simple-patches/include__linux__wait.h-0.before ../../simple-patches/include__linux__wait.h-0.after
+simple-patch kernel/fork.c ../../simple-patches/kernel__fork.c-0.before ../../simple-patches/kernel__fork.c-0.after
+simple-patch kernel/fork.c ../../simple-patches/kernel__fork.c-1.before ../../simple-patches/kernel__fork.c-1.after
+simple-patch kernel/fork.c ../../simple-patches/kernel__fork.c-2.before ../../simple-patches/kernel__fork.c-2.after
+simple-patch kernel/fork.c ../../simple-patches/kernel__fork.c-3.before ../../simple-patches/kernel__fork.c-3.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-0.before ../../simple-patches/kernel__sched.c-0.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-1.before ../../simple-patches/kernel__sched.c-1.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-2.before ../../simple-patches/kernel__sched.c-2.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-3.before ../../simple-patches/kernel__sched.c-3.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-4.before ../../simple-patches/kernel__sched.c-4.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-5.before ../../simple-patches/kernel__sched.c-5.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-6.before ../../simple-patches/kernel__sched.c-6.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-7.before ../../simple-patches/kernel__sched.c-7.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-8.before ../../simple-patches/kernel__sched.c-8.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-9.before ../../simple-patches/kernel__sched.c-9.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-10.before ../../simple-patches/kernel__sched.c-10.after
+simple-patch kernel/sched.c ../../simple-patches/kernel__sched.c-11.before ../../simple-patches/kernel__sched.c-11.after
+simple-patch kernel/softirq.c ../../simple-patches/kernel__softirq.c-0.before ../../simple-patches/kernel__softirq.c-0.after
+simple-patch kernel/softirq.c ../../simple-patches/kernel__softirq.c-1.before ../../simple-patches/kernel__softirq.c-1.after
+simple-patch kernel/softirq.c ../../simple-patches/kernel__softirq.c-2.before ../../simple-patches/kernel__softirq.c-2.after
+simple-patch kernel/softirq.c ../../simple-patches/kernel__softirq.c-3.before ../../simple-patches/kernel__softirq.c-3.after
+simple-patch lib/brlock.c ../../simple-patches/lib__brlock.c-0.before ../../simple-patches/lib__brlock.c-0.after
+simple-patch lib/brlock.c ../../simple-patches/lib__brlock.c-1.before ../../simple-patches/lib__brlock.c-1.after
+simple-patch lib/brlock.c ../../simple-patches/lib__brlock.c-2.before ../../simple-patches/lib__brlock.c-2.after
+simple-patch lib/brlock.c ../../simple-patches/lib__brlock.c-3.before ../../simple-patches/lib__brlock.c-3.after
+simple-patch lib/rwsem.c ../../simple-patches/lib__rwsem.c-0.before ../../simple-patches/lib__rwsem.c-0.after
+simple-patch lib/rwsem.c ../../simple-patches/lib__rwsem.c-1.before ../../simple-patches/lib__rwsem.c-1.after
+simple-patch lib/rwsem.c ../../simple-patches/lib__rwsem.c-2.before ../../simple-patches/lib__rwsem.c-2.after
+simple-patch lib/rwsem.c ../../simple-patches/lib__rwsem.c-3.before ../../simple-patches/lib__rwsem.c-3.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-0.before ../../simple-patches/mm__filemap.c-0.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-1.before ../../simple-patches/mm__filemap.c-1.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-2.before ../../simple-patches/mm__filemap.c-2.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-3.before ../../simple-patches/mm__filemap.c-3.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-4.before ../../simple-patches/mm__filemap.c-4.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-5.before ../../simple-patches/mm__filemap.c-5.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-6.before ../../simple-patches/mm__filemap.c-6.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-7.before ../../simple-patches/mm__filemap.c-7.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-8.before ../../simple-patches/mm__filemap.c-8.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-9.before ../../simple-patches/mm__filemap.c-9.after
+simple-patch mm/filemap.c ../../simple-patches/mm__filemap.c-10.before ../../simple-patches/mm__filemap.c-10.after
+simple-patch mm/highmem.c ../../simple-patches/mm__highmem.c-0.before ../../simple-patches/mm__highmem.c-0.after
+simple-patch mm/highmem.c ../../simple-patches/mm__highmem.c-1.before ../../simple-patches/mm__highmem.c-1.after
+simple-patch mm/memory.c ../../simple-patches/mm__memory.c-0.before ../../simple-patches/mm__memory.c-0.after
+simple-patch mm/memory.c ../../simple-patches/mm__memory.c-1.before ../../simple-patches/mm__memory.c-1.after
+simple-patch mm/numa.c ../../simple-patches/mm__numa.c-0.before ../../simple-patches/mm__numa.c-0.after
+simple-patch mm/page_alloc.c ../../simple-patches/mm__page_alloc.c-0.before ../../simple-patches/mm__page_alloc.c-0.after
+simple-patch mm/page_alloc.c ../../simple-patches/mm__page_alloc.c-1.before ../../simple-patches/mm__page_alloc.c-1.after
+simple-patch mm/page_alloc.c ../../simple-patches/mm__page_alloc.c-2.before ../../simple-patches/mm__page_alloc.c-2.after
+simple-patch mm/page_alloc.c ../../simple-patches/mm__page_alloc.c-3.before ../../simple-patches/mm__page_alloc.c-3.after
+simple-patch mm/page_alloc.c ../../simple-patches/mm__page_alloc.c-4.before ../../simple-patches/mm__page_alloc.c-4.after
+simple-patch mm/page_alloc.c ../../simple-patches/mm__page_alloc.c-5.before ../../simple-patches/mm__page_alloc.c-5.after
+simple-patch mm/page_alloc.c ../../simple-patches/mm__page_alloc.c-6.before ../../simple-patches/mm__page_alloc.c-6.after
+simple-patch mm/page_alloc.c ../../simple-patches/mm__page_alloc.c-7.before ../../simple-patches/mm__page_alloc.c-7.after
+simple-patch mm/slab.c ../../simple-patches/mm__slab.c-0.before ../../simple-patches/mm__slab.c-0.after
+simple-patch mm/swap.c ../../simple-patches/mm__swap.c-0.before ../../simple-patches/mm__swap.c-0.after
+simple-patch mm/swap.c ../../simple-patches/mm__swap.c-1.before ../../simple-patches/mm__swap.c-1.after
+simple-patch mm/swap.c ../../simple-patches/mm__swap.c-2.before ../../simple-patches/mm__swap.c-2.after
+simple-patch mm/swap.c ../../simple-patches/mm__swap.c-3.before ../../simple-patches/mm__swap.c-3.after
+simple-patch mm/swapfile.c ../../simple-patches/mm__swapfile.c-0.before ../../simple-patches/mm__swapfile.c-0.after
+simple-patch mm/swapfile.c ../../simple-patches/mm__swapfile.c-1.before ../../simple-patches/mm__swapfile.c-1.after
+simple-patch mm/vmscan.c ../../simple-patches/mm__vmscan.c-0.before ../../simple-patches/mm__vmscan.c-0.after
+simple-patch mm/vmscan.c ../../simple-patches/mm__vmscan.c-1.before ../../simple-patches/mm__vmscan.c-1.after
+simple-patch mm/vmscan.c ../../simple-patches/mm__vmscan.c-2.before ../../simple-patches/mm__vmscan.c-2.after
+simple-patch mm/vmscan.c ../../simple-patches/mm__vmscan.c-3.before ../../simple-patches/mm__vmscan.c-3.after
+simple-patch mm/vmscan.c ../../simple-patches/mm__vmscan.c-4.before ../../simple-patches/mm__vmscan.c-4.after
+simple-patch mm/vmscan.c ../../simple-patches/mm__vmscan.c-5.before ../../simple-patches/mm__vmscan.c-5.after
+simple-patch net/core/dev.c ../../simple-patches/net__core__dev.c-0.before ../../simple-patches/net__core__dev.c-0.after
+simple-patch net/ipv4/raw.c ../../simple-patches/net__ipv4__raw.c-0.before ../../simple-patches/net__ipv4__raw.c-0.after
+simple-patch net/ipv4/raw.c ../../simple-patches/net__ipv4__raw.c-1.before ../../simple-patches/net__ipv4__raw.c-1.after
+simple-patch net/ipv4/udp.c ../../simple-patches/net__ipv4__udp.c-0.before ../../simple-patches/net__ipv4__udp.c-0.after
+simple-patch net/ipv4/udp.c ../../simple-patches/net__ipv4__udp.c-1.before ../../simple-patches/net__ipv4__udp.c-1.after
+simple-patch drivers/char/conmakehash.c ../../simple-patches/conmakehash.before ../../simple-patches/conmakehash.after
+tcc -static -o ${BINDIR}/linux24-conmakehash drivers/char/conmakehash.c
+linux24-conmakehash drivers/char/cp437.uni drivers/char/consolemap_deftbl.c
+simple-patch lib/gen_crc32table.c ../../simple-patches/gen-crc32.before ../../simple-patches/gen-crc32.after
+tcc -static -o ${BINDIR}/linux24-gen-crc32 lib/gen_crc32table.c
+linux24-gen-crc32 lib/crc32table.h
+tcc -static -o ${BINDIR}/linux24-config ../../files/config-header.c
+linux24-config ../../files/config include/linux/autoconf.h
+cp ../../files/version.h include/linux/version.h
+cp ../../files/compile.h include/linux/compile.h
+cp ../../files/tcc-helpers.c lib/tcc-helpers.c
+mkdir include/asm
+cp include/asm-i386/a.out.h include/asm/a.out.h
+cp include/asm-i386/acpi.h include/asm/acpi.h
+cp include/asm-i386/apic.h include/asm/apic.h
+cp include/asm-i386/apicdef.h include/asm/apicdef.h
+cp include/asm-i386/atomic.h include/asm/atomic.h
+cp include/asm-i386/bitops.h include/asm/bitops.h
+cp include/asm-i386/boot.h include/asm/boot.h
+cp include/asm-i386/bugs.h include/asm/bugs.h
+cp include/asm-i386/byteorder.h include/asm/byteorder.h
+cp include/asm-i386/cache.h include/asm/cache.h
+cp include/asm-i386/checksum.h include/asm/checksum.h
+cp include/asm-i386/cobalt.h include/asm/cobalt.h
+cp include/asm-i386/cpufeature.h include/asm/cpufeature.h
+cp include/asm-i386/current.h include/asm/current.h
+cp include/asm-i386/debugreg.h include/asm/debugreg.h
+cp include/asm-i386/delay.h include/asm/delay.h
+cp include/asm-i386/desc.h include/asm/desc.h
+cp include/asm-i386/div64.h include/asm/div64.h
+cp include/asm-i386/dma.h include/asm/dma.h
+cp include/asm-i386/e820.h include/asm/e820.h
+cp include/asm-i386/edd.h include/asm/edd.h
+cp include/asm-i386/elf.h include/asm/elf.h
+cp include/asm-i386/errno.h include/asm/errno.h
+cp include/asm-i386/fcntl.h include/asm/fcntl.h
+cp include/asm-i386/fixmap.h include/asm/fixmap.h
+cp include/asm-i386/floppy.h include/asm/floppy.h
+cp include/asm-i386/hardirq.h include/asm/hardirq.h
+cp include/asm-i386/hc_sl811-hw.h include/asm/hc_sl811-hw.h
+cp include/asm-i386/hdreg.h include/asm/hdreg.h
+cp include/asm-i386/highmem.h include/asm/highmem.h
+cp include/asm-i386/hw_irq.h include/asm/hw_irq.h
+cp include/asm-i386/i387.h include/asm/i387.h
+cp include/asm-i386/ide.h include/asm/ide.h
+cp include/asm-i386/init.h include/asm/init.h
+cp include/asm-i386/io.h include/asm/io.h
+cp include/asm-i386/io_apic.h include/asm/io_apic.h
+cp include/asm-i386/ioctl.h include/asm/ioctl.h
+cp include/asm-i386/ioctls.h include/asm/ioctls.h
+cp include/asm-i386/ipc.h include/asm/ipc.h
+cp include/asm-i386/ipcbuf.h include/asm/ipcbuf.h
+cp include/asm-i386/irq.h include/asm/irq.h
+cp include/asm-i386/keyboard.h include/asm/keyboard.h
+cp include/asm-i386/kmap_types.h include/asm/kmap_types.h
+cp include/asm-i386/ldt.h include/asm/ldt.h
+cp include/asm-i386/linux_logo.h include/asm/linux_logo.h
+cp include/asm-i386/lithium.h include/asm/lithium.h
+cp include/asm-i386/locks.h include/asm/locks.h
+cp include/asm-i386/math_emu.h include/asm/math_emu.h
+cp include/asm-i386/mc146818rtc.h include/asm/mc146818rtc.h
+cp include/asm-i386/mca_dma.h include/asm/mca_dma.h
+cp include/asm-i386/mman.h include/asm/mman.h
+cp include/asm-i386/mmu.h include/asm/mmu.h
+cp include/asm-i386/mmu_context.h include/asm/mmu_context.h
+cp include/asm-i386/mmx.h include/asm/mmx.h
+cp include/asm-i386/module.h include/asm/module.h
+cp include/asm-i386/mpspec.h include/asm/mpspec.h
+cp include/asm-i386/msgbuf.h include/asm/msgbuf.h
+cp include/asm-i386/msr.h include/asm/msr.h
+cp include/asm-i386/mtrr.h include/asm/mtrr.h
+cp include/asm-i386/namei.h include/asm/namei.h
+cp include/asm-i386/page.h include/asm/page.h
+cp include/asm-i386/param.h include/asm/param.h
+cp include/asm-i386/parport.h include/asm/parport.h
+cp include/asm-i386/pci.h include/asm/pci.h
+cp include/asm-i386/pgalloc.h include/asm/pgalloc.h
+cp include/asm-i386/pgtable-2level.h include/asm/pgtable-2level.h
+cp include/asm-i386/pgtable-3level.h include/asm/pgtable-3level.h
+cp include/asm-i386/pgtable.h include/asm/pgtable.h
+cp include/asm-i386/poll.h include/asm/poll.h
+cp include/asm-i386/posix_types.h include/asm/posix_types.h
+cp include/asm-i386/processor.h include/asm/processor.h
+cp include/asm-i386/ptrace.h include/asm/ptrace.h
+cp include/asm-i386/resource.h include/asm/resource.h
+cp include/asm-i386/rwlock.h include/asm/rwlock.h
+cp include/asm-i386/rwsem.h include/asm/rwsem.h
+cp include/asm-i386/save_state.h include/asm/save_state.h
+cp include/asm-i386/scatterlist.h include/asm/scatterlist.h
+cp include/asm-i386/segment.h include/asm/segment.h
+cp include/asm-i386/semaphore.h include/asm/semaphore.h
+cp include/asm-i386/sembuf.h include/asm/sembuf.h
+cp include/asm-i386/serial.h include/asm/serial.h
+cp include/asm-i386/setup.h include/asm/setup.h
+cp include/asm-i386/shmbuf.h include/asm/shmbuf.h
+cp include/asm-i386/shmparam.h include/asm/shmparam.h
+cp include/asm-i386/sigcontext.h include/asm/sigcontext.h
+cp include/asm-i386/siginfo.h include/asm/siginfo.h
+cp include/asm-i386/signal.h include/asm/signal.h
+cp include/asm-i386/sl811-hw.h include/asm/sl811-hw.h
+cp include/asm-i386/smp.h include/asm/smp.h
+cp include/asm-i386/smpboot.h include/asm/smpboot.h
+cp include/asm-i386/smplock.h include/asm/smplock.h
+cp include/asm-i386/socket.h include/asm/socket.h
+cp include/asm-i386/sockios.h include/asm/sockios.h
+cp include/asm-i386/softirq.h include/asm/softirq.h
+cp include/asm-i386/spinlock.h include/asm/spinlock.h
+cp include/asm-i386/stat.h include/asm/stat.h
+cp include/asm-i386/statfs.h include/asm/statfs.h
+cp include/asm-i386/string-486.h include/asm/string-486.h
+cp include/asm-i386/string.h include/asm/string.h
+cp include/asm-i386/system.h include/asm/system.h
+cp include/asm-i386/termbits.h include/asm/termbits.h
+cp include/asm-i386/termios.h include/asm/termios.h
+cp include/asm-i386/timex.h include/asm/timex.h
+cp include/asm-i386/tlb.h include/asm/tlb.h
+cp include/asm-i386/types.h include/asm/types.h
+cp include/asm-i386/uaccess.h include/asm/uaccess.h
+cp include/asm-i386/ucontext.h include/asm/ucontext.h
+cp include/asm-i386/unaligned.h include/asm/unaligned.h
+cp include/asm-i386/unistd.h include/asm/unistd.h
+cp include/asm-i386/user.h include/asm/user.h
+cp include/asm-i386/vga.h include/asm/vga.h
+cp include/asm-i386/vm86.h include/asm/vm86.h
+cp include/asm-i386/xor.h include/asm/xor.h
+cp ../../files/kexec.c kernel/kexec.c
+cp ../../files/machine_kexec.c arch/i386/kernel/machine_kexec.c
+cp ../../files/relocate_kernel.S arch/i386/kernel/relocate_kernel.S
+cp ../../files/kexec.h include/linux/kexec.h
+simple-patch kernel/sys.c ../../simple-patches/kexec-sys-include.before ../../simple-patches/kexec-sys-include.after
+simple-patch kernel/sys.c ../../simple-patches/kexec-sys-reboot.before ../../simple-patches/kexec-sys-reboot.after
+alias cc="tcc -D__GNUC__=2 -D__GNUC_MINOR__=95 -D__KERNEL__ -nostdinc -I${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/include -Iinclude -O2 -fno-common"
+cc -D__ASSEMBLY__ -traditional -c arch/i386/kernel/head.S -o arch/i386/kernel/head.o
+cc -DKBUILD_BASENAME=bluesmoke -c arch/i386/kernel/bluesmoke.c -o arch/i386/kernel/bluesmoke.o
+cc -DKBUILD_BASENAME=dmi_scan -c arch/i386/kernel/dmi_scan.c -o arch/i386/kernel/dmi_scan.o
+cc -D__ASSEMBLY__ -traditional -c arch/i386/kernel/entry.S -o arch/i386/kernel/entry.o
+cc -DKBUILD_BASENAME=i386_ksyms -c arch/i386/kernel/i386_ksyms.c -o arch/i386/kernel/i386_ksyms.o
+cc -DKBUILD_BASENAME=i387 -c arch/i386/kernel/i387.c -o arch/i386/kernel/i387.o
+cc -DKBUILD_BASENAME=i8259 -c arch/i386/kernel/i8259.c -o arch/i386/kernel/i8259.o
+cc -DKBUILD_BASENAME=init_task -c arch/i386/kernel/init_task.c -o arch/i386/kernel/init_task.o
+cc -DKBUILD_BASENAME=ioport -c arch/i386/kernel/ioport.c -o arch/i386/kernel/ioport.o
+cc -DKBUILD_BASENAME=irq -c arch/i386/kernel/irq.c -o arch/i386/kernel/irq.o
+cc -DKBUILD_BASENAME=ldt -c arch/i386/kernel/ldt.c -o arch/i386/kernel/ldt.o
+cc -DKBUILD_BASENAME=pci_dma -c arch/i386/kernel/pci-dma.c -o arch/i386/kernel/pci-dma.o
+cc -DKBUILD_BASENAME=process -c arch/i386/kernel/process.c -o arch/i386/kernel/process.o
+cc -DKBUILD_BASENAME=ptrace -c arch/i386/kernel/ptrace.c -o arch/i386/kernel/ptrace.o
+cc -DKBUILD_BASENAME=semaphore -c arch/i386/kernel/semaphore.c -o arch/i386/kernel/semaphore.o
+cc -DKBUILD_BASENAME=setup -c arch/i386/kernel/setup.c -o arch/i386/kernel/setup.o
+cc -DKBUILD_BASENAME=signal -c arch/i386/kernel/signal.c -o arch/i386/kernel/signal.o
+cc -DKBUILD_BASENAME=sys_i386 -c arch/i386/kernel/sys_i386.c -o arch/i386/kernel/sys_i386.o
+cc -DKBUILD_BASENAME=time -c arch/i386/kernel/time.c -o arch/i386/kernel/time.o
+cc -DKBUILD_BASENAME=traps -c arch/i386/kernel/traps.c -o arch/i386/kernel/traps.o
+cc -DKBUILD_BASENAME=vm86 -c arch/i386/kernel/vm86.c -o arch/i386/kernel/vm86.o
+cc -D__ASSEMBLY__ -traditional -c arch/i386/lib/checksum.S -o arch/i386/lib/checksum.o
+cc -DKBUILD_BASENAME=delay -c arch/i386/lib/delay.c -o arch/i386/lib/delay.o
+cc -D__ASSEMBLY__ -traditional -c arch/i386/lib/getuser.S -o arch/i386/lib/getuser.o
+cc -DKBUILD_BASENAME=memcpy -c arch/i386/lib/memcpy.c -o arch/i386/lib/memcpy.o
+cc -DKBUILD_BASENAME=old_checksum -c arch/i386/lib/old-checksum.c -o arch/i386/lib/old-checksum.o
+cc -DKBUILD_BASENAME=strstr -c arch/i386/lib/strstr.c -o arch/i386/lib/strstr.o
+cc -DKBUILD_BASENAME=usercopy -c arch/i386/lib/usercopy.c -o arch/i386/lib/usercopy.o
+cc -DKBUILD_BASENAME=extable -c arch/i386/mm/extable.c -o arch/i386/mm/extable.o
+cc -DKBUILD_BASENAME=fault -c arch/i386/mm/fault.c -o arch/i386/mm/fault.o
+cc -DKBUILD_BASENAME=init -c arch/i386/mm/init.c -o arch/i386/mm/init.o
+cc -DKBUILD_BASENAME=ioremap -c arch/i386/mm/ioremap.c -o arch/i386/mm/ioremap.o
+cc -DKBUILD_BASENAME=pageattr -c arch/i386/mm/pageattr.c -o arch/i386/mm/pageattr.o
+cc -DKBUILD_BASENAME=blkpg -c drivers/block/blkpg.c -o drivers/block/blkpg.o
+cc -DKBUILD_BASENAME=elevator -c drivers/block/elevator.c -o drivers/block/elevator.o
+cc -DKBUILD_BASENAME=floppy -c drivers/block/floppy.c -o drivers/block/floppy.o
+cc -DKBUILD_BASENAME=genhd -c drivers/block/genhd.c -o drivers/block/genhd.o
+cc -DKBUILD_BASENAME=ll_rw_blk -c drivers/block/ll_rw_blk.c -o drivers/block/ll_rw_blk.o
+cc -DKBUILD_BASENAME=loop -c drivers/block/loop.c -o drivers/block/loop.o
+cc -DKBUILD_BASENAME=rd -c drivers/block/rd.c -o drivers/block/rd.o
+cc -DKBUILD_BASENAME=cdrom -c drivers/cdrom/cdrom.c -o drivers/cdrom/cdrom.o
+cc -DKBUILD_BASENAME=console -c drivers/char/console.c -o drivers/char/console.o
+cc -DKBUILD_BASENAME=consolemap -c drivers/char/consolemap.c -o drivers/char/consolemap.o
+cc -DKBUILD_BASENAME=consolemap_deftbl -c drivers/char/consolemap_deftbl.c -o drivers/char/consolemap_deftbl.o
+cc -DKBUILD_BASENAME=defkeymap -c drivers/char/defkeymap.c -o drivers/char/defkeymap.o
+cc -DKBUILD_BASENAME=keyboard -c drivers/char/keyboard.c -o drivers/char/keyboard.o
+cc -DKBUILD_BASENAME=mem -c drivers/char/mem.c -o drivers/char/mem.o
+cc -DKBUILD_BASENAME=misc -c drivers/char/misc.c -o drivers/char/misc.o
+cc -DKBUILD_BASENAME=n_tty -c drivers/char/n_tty.c -o drivers/char/n_tty.o
+cc -DKBUILD_BASENAME=pc_keyb -c drivers/char/pc_keyb.c -o drivers/char/pc_keyb.o
+cc -DKBUILD_BASENAME=pty -c drivers/char/pty.c -o drivers/char/pty.o
+cc -DKBUILD_BASENAME=random -c drivers/char/random.c -o drivers/char/random.o
+cc -DKBUILD_BASENAME=raw -c drivers/char/raw.c -o drivers/char/raw.o
+cc -DKBUILD_BASENAME=selection -c drivers/char/selection.c -o drivers/char/selection.o
+cc -DKBUILD_BASENAME=serial -c drivers/char/serial.c -o drivers/char/serial.o
+cc -DKBUILD_BASENAME=tty_io -c drivers/char/tty_io.c -o drivers/char/tty_io.o
+cc -DKBUILD_BASENAME=tty_ioctl -c drivers/char/tty_ioctl.c -o drivers/char/tty_ioctl.o
+cc -DKBUILD_BASENAME=vc_screen -c drivers/char/vc_screen.c -o drivers/char/vc_screen.o
+cc -DKBUILD_BASENAME=vt -c drivers/char/vt.c -o drivers/char/vt.o
+cc -DKBUILD_BASENAME=ide_cd -c drivers/ide/ide-cd.c -o drivers/ide/ide-cd.o
+cc -DKBUILD_BASENAME=ide_default -c drivers/ide/ide-default.c -o drivers/ide/ide-default.o
+cc -DKBUILD_BASENAME=ide_disk -c drivers/ide/ide-disk.c -o drivers/ide/ide-disk.o
+cc -DKBUILD_BASENAME=ide_geometry -c drivers/ide/ide-geometry.c -o drivers/ide/ide-geometry.o
+cc -DKBUILD_BASENAME=ide_io -c drivers/ide/ide-io.c -o drivers/ide/ide-io.o
+cc -DKBUILD_BASENAME=ide_iops -c drivers/ide/ide-iops.c -o drivers/ide/ide-iops.o
+cc -DKBUILD_BASENAME=ide_lib -c drivers/ide/ide-lib.c -o drivers/ide/ide-lib.o
+cc -DKBUILD_BASENAME=ide_probe_mini -c drivers/ide/ide-probe-mini.c -o drivers/ide/ide-probe-mini.o
+cc -DKBUILD_BASENAME=ide_probe -c drivers/ide/ide-probe.c -o drivers/ide/ide-probe.o
+cc -DKBUILD_BASENAME=ide_proc -c drivers/ide/ide-proc.c -o drivers/ide/ide-proc.o
+cc -DKBUILD_BASENAME=ide_taskfile -c drivers/ide/ide-taskfile.c -o drivers/ide/ide-taskfile.o
+cc -DKBUILD_BASENAME=ide -c drivers/ide/ide.c -o drivers/ide/ide.o
+cc -DKBUILD_BASENAME=Space -c drivers/net/Space.c -o drivers/net/Space.o
+cc -DKBUILD_BASENAME=auto_irq -c drivers/net/auto_irq.c -o drivers/net/auto_irq.o
+cc -DKBUILD_BASENAME=dummy -c drivers/net/dummy.c -o drivers/net/dummy.o
+cc -DKBUILD_BASENAME=loopback -c drivers/net/loopback.c -o drivers/net/loopback.o
+cc -DKBUILD_BASENAME=net_init -c drivers/net/net_init.c -o drivers/net/net_init.o
+cc -DKBUILD_BASENAME=setup -c drivers/net/setup.c -o drivers/net/setup.o
+cc -DKBUILD_BASENAME=vgacon -c drivers/video/vgacon.c -o drivers/video/vgacon.o
+cc -DKBUILD_BASENAME=attr -c fs/attr.c -o fs/attr.o
+cc -DKBUILD_BASENAME=bad_inode -c fs/bad_inode.c -o fs/bad_inode.o
+cc -DKBUILD_BASENAME=binfmt_elf -c fs/binfmt_elf.c -o fs/binfmt_elf.o
+cc -DKBUILD_BASENAME=binfmt_script -c fs/binfmt_script.c -o fs/binfmt_script.o
+cc -DKBUILD_BASENAME=block_dev -c fs/block_dev.c -o fs/block_dev.o
+cc -DKBUILD_BASENAME=buffer -c fs/buffer.c -o fs/buffer.o
+cc -DKBUILD_BASENAME=char_dev -c fs/char_dev.c -o fs/char_dev.o
+cc -DKBUILD_BASENAME=dcache -c fs/dcache.c -o fs/dcache.o
+cc -DKBUILD_BASENAME=devices -c fs/devices.c -o fs/devices.o
+cc -DKBUILD_BASENAME=inode -c fs/devpts/inode.c -o fs/devpts/inode.o
+cc -DKBUILD_BASENAME=root -c fs/devpts/root.c -o fs/devpts/root.o
+cc -DKBUILD_BASENAME=dnotify -c fs/dnotify.c -o fs/dnotify.o
+cc -DKBUILD_BASENAME=exec -c fs/exec.c -o fs/exec.o
+cc -DKBUILD_BASENAME=balloc -c fs/ext2/balloc.c -o fs/ext2/balloc.o
+cc -DKBUILD_BASENAME=bitmap -c fs/ext2/bitmap.c -o fs/ext2/bitmap.o
+cc -DKBUILD_BASENAME=dir -c fs/ext2/dir.c -o fs/ext2/dir.o
+cc -DKBUILD_BASENAME=file -c fs/ext2/file.c -o fs/ext2/file.o
+cc -DKBUILD_BASENAME=fsync -c fs/ext2/fsync.c -o fs/ext2/fsync.o
+cc -DKBUILD_BASENAME=ialloc -c fs/ext2/ialloc.c -o fs/ext2/ialloc.o
+cc -DKBUILD_BASENAME=inode -c fs/ext2/inode.c -o fs/ext2/inode.o
+cc -DKBUILD_BASENAME=ioctl -c fs/ext2/ioctl.c -o fs/ext2/ioctl.o
+cc -DKBUILD_BASENAME=namei -c fs/ext2/namei.c -o fs/ext2/namei.o
+cc -DKBUILD_BASENAME=super -c fs/ext2/super.c -o fs/ext2/super.o
+cc -DKBUILD_BASENAME=symlink -c fs/ext2/symlink.c -o fs/ext2/symlink.o
+cc -DKBUILD_BASENAME=fcntl -c fs/fcntl.c -o fs/fcntl.o
+cc -DKBUILD_BASENAME=fifo -c fs/fifo.c -o fs/fifo.o
+cc -DKBUILD_BASENAME=file -c fs/file.c -o fs/file.o
+cc -DKBUILD_BASENAME=file_table -c fs/file_table.c -o fs/file_table.o
+cc -DKBUILD_BASENAME=filesystems -c fs/filesystems.c -o fs/filesystems.o
+cc -DKBUILD_BASENAME=inode -c fs/inode.c -o fs/inode.o
+cc -DKBUILD_BASENAME=iobuf -c fs/iobuf.c -o fs/iobuf.o
+cc -DKBUILD_BASENAME=ioctl -c fs/ioctl.c -o fs/ioctl.o
+cc -DKBUILD_BASENAME=dir -c fs/isofs/dir.c -o fs/isofs/dir.o
+cc -DKBUILD_BASENAME=inode -c fs/isofs/inode.c -o fs/isofs/inode.o
+cc -DKBUILD_BASENAME=namei -c fs/isofs/namei.c -o fs/isofs/namei.o
+cc -DKBUILD_BASENAME=rock -c fs/isofs/rock.c -o fs/isofs/rock.o
+cc -DKBUILD_BASENAME=util -c fs/isofs/util.c -o fs/isofs/util.o
+cc -DKBUILD_BASENAME=locks -c fs/locks.c -o fs/locks.o
+cc -DKBUILD_BASENAME=namei -c fs/namei.c -o fs/namei.o
+cc -DKBUILD_BASENAME=namespace -c fs/namespace.c -o fs/namespace.o
+cc -DKBUILD_BASENAME=open -c fs/open.c -o fs/open.o
+cc -DKBUILD_BASENAME=check -c fs/partitions/check.c -o fs/partitions/check.o
+cc -DKBUILD_BASENAME=msdos -c fs/partitions/msdos.c -o fs/partitions/msdos.o
+cc -DKBUILD_BASENAME=pipe -c fs/pipe.c -o fs/pipe.o
+cc -DKBUILD_BASENAME=array -c fs/proc/array.c -o fs/proc/array.o
+cc -DKBUILD_BASENAME=base -c fs/proc/base.c -o fs/proc/base.o
+cc -DKBUILD_BASENAME=generic -c fs/proc/generic.c -o fs/proc/generic.o
+cc -DKBUILD_BASENAME=inode -c fs/proc/inode.c -o fs/proc/inode.o
+cc -DKBUILD_BASENAME=kcore -c fs/proc/kcore.c -o fs/proc/kcore.o
+cc -DKBUILD_BASENAME=kmsg -c fs/proc/kmsg.c -o fs/proc/kmsg.o
+cc -DKBUILD_BASENAME=proc_misc -c fs/proc/proc_misc.c -o fs/proc/proc_misc.o
+cc -DKBUILD_BASENAME=proc_tty -c fs/proc/proc_tty.c -o fs/proc/proc_tty.o
+cc -DKBUILD_BASENAME=root -c fs/proc/root.c -o fs/proc/root.o
+cc -DKBUILD_BASENAME=quota -c fs/quota.c -o fs/quota.o
+cc -DKBUILD_BASENAME=inode -c fs/ramfs/inode.c -o fs/ramfs/inode.o
+cc -DKBUILD_BASENAME=read_write -c fs/read_write.c -o fs/read_write.o
+cc -DKBUILD_BASENAME=readdir -c fs/readdir.c -o fs/readdir.o
+cc -DKBUILD_BASENAME=inode -c fs/romfs/inode.c -o fs/romfs/inode.o
+cc -DKBUILD_BASENAME=select -c fs/select.c -o fs/select.o
+cc -DKBUILD_BASENAME=seq_file -c fs/seq_file.c -o fs/seq_file.o
+cc -DKBUILD_BASENAME=stat -c fs/stat.c -o fs/stat.o
+cc -DKBUILD_BASENAME=super -c fs/super.c -o fs/super.o
+cc -DKBUILD_BASENAME=xattr -c fs/xattr.c -o fs/xattr.o
+cc -DKBUILD_BASENAME=do_mounts -c init/do_mounts.c -o init/do_mounts.o
+cc -DKBUILD_BASENAME=main -c init/main.c -o init/main.o
+cc -DKBUILD_BASENAME=version -DUTS_MACHINE=\"i386\" -c init/version.c -o init/version.o
+cc -DKBUILD_BASENAME=msg -c ipc/msg.c -o ipc/msg.o
+cc -DKBUILD_BASENAME=sem -c ipc/sem.c -o ipc/sem.o
+cc -DKBUILD_BASENAME=shm -c ipc/shm.c -o ipc/shm.o
+cc -DKBUILD_BASENAME=util -c ipc/util.c -o ipc/util.o
+cc -DKBUILD_BASENAME=acct -c kernel/acct.c -o kernel/acct.o
+cc -DKBUILD_BASENAME=capability -c kernel/capability.c -o kernel/capability.o
+cc -DKBUILD_BASENAME=context -c kernel/context.c -o kernel/context.o
+cc -DKBUILD_BASENAME=dma -c kernel/dma.c -o kernel/dma.o
+cc -DKBUILD_BASENAME=exec_domain -c kernel/exec_domain.c -o kernel/exec_domain.o
+cc -DKBUILD_BASENAME=exit -c kernel/exit.c -o kernel/exit.o
+cc -DKBUILD_BASENAME=fork -c kernel/fork.c -o kernel/fork.o
+cc -DKBUILD_BASENAME=info -c kernel/info.c -o kernel/info.o
+cc -DKBUILD_BASENAME=itimer -c kernel/itimer.c -o kernel/itimer.o
+cc -DKBUILD_BASENAME=kmod -c kernel/kmod.c -o kernel/kmod.o
+cc -DKBUILD_BASENAME=module -c kernel/module.c -o kernel/module.o
+cc -DKBUILD_BASENAME=panic -c kernel/panic.c -o kernel/panic.o
+cc -DKBUILD_BASENAME=printk -c kernel/printk.c -o kernel/printk.o
+cc -DKBUILD_BASENAME=ptrace -c kernel/ptrace.c -o kernel/ptrace.o
+cc -DKBUILD_BASENAME=resource -c kernel/resource.c -o kernel/resource.o
+cc -DKBUILD_BASENAME=sched -c kernel/sched.c -o kernel/sched.o
+cc -DKBUILD_BASENAME=signal -c kernel/signal.c -o kernel/signal.o
+cc -DKBUILD_BASENAME=softirq -c kernel/softirq.c -o kernel/softirq.o
+cc -DKBUILD_BASENAME=kexec -c kernel/kexec.c -o kernel/kexec.o
+cc -DKBUILD_BASENAME=machine_kexec -c arch/i386/kernel/machine_kexec.c -o arch/i386/kernel/machine_kexec.o
+cc -c arch/i386/kernel/relocate_kernel.S -o arch/i386/kernel/relocate_kernel.o
+cc -DKBUILD_BASENAME=sys -c kernel/sys.c -o kernel/sys.o
+cc -DKBUILD_BASENAME=sysctl -c kernel/sysctl.c -o kernel/sysctl.o
+cc -DKBUILD_BASENAME=time -c kernel/time.c -o kernel/time.o
+cc -DKBUILD_BASENAME=timer -c kernel/timer.c -o kernel/timer.o
+cc -DKBUILD_BASENAME=uid16 -c kernel/uid16.c -o kernel/uid16.o
+cc -DKBUILD_BASENAME=user -c kernel/user.c -o kernel/user.o
+cc -DKBUILD_BASENAME=brlock -c lib/brlock.c -o lib/brlock.o
+cc -DKBUILD_BASENAME=bust_spinlocks -c lib/bust_spinlocks.c -o lib/bust_spinlocks.o
+cc -DKBUILD_BASENAME=cmdline -c lib/cmdline.c -o lib/cmdline.o
+cc -DKBUILD_BASENAME=crc32 -c lib/crc32.c -o lib/crc32.o
+cc -DKBUILD_BASENAME=ctype -c lib/ctype.c -o lib/ctype.o
+cc -DKBUILD_BASENAME=dec_and_lock -c lib/dec_and_lock.c -o lib/dec_and_lock.o
+cc -DKBUILD_BASENAME=dump_stack -c lib/dump_stack.c -o lib/dump_stack.o
+cc -DKBUILD_BASENAME=errno -c lib/errno.c -o lib/errno.o
+cc -DKBUILD_BASENAME=rbtree -c lib/rbtree.c -o lib/rbtree.o
+cc -DKBUILD_BASENAME=rwsem -c lib/rwsem.c -o lib/rwsem.o
+cc -DKBUILD_BASENAME=string -c lib/string.c -o lib/string.o
+cc -DKBUILD_BASENAME=tcc_helpers -c lib/tcc-helpers.c -o lib/tcc-helpers.o
+cc -DKBUILD_BASENAME=vsprintf -c lib/vsprintf.c -o lib/vsprintf.o
+cc -DKBUILD_BASENAME=bootmem -c mm/bootmem.c -o mm/bootmem.o
+cc -DKBUILD_BASENAME=filemap -c mm/filemap.c -o mm/filemap.o
+cc -DKBUILD_BASENAME=highmem -c mm/highmem.c -o mm/highmem.o
+cc -DKBUILD_BASENAME=memory -c mm/memory.c -o mm/memory.o
+cc -DKBUILD_BASENAME=mlock -c mm/mlock.c -o mm/mlock.o
+cc -DKBUILD_BASENAME=mmap -c mm/mmap.c -o mm/mmap.o
+cc -DKBUILD_BASENAME=mprotect -c mm/mprotect.c -o mm/mprotect.o
+cc -DKBUILD_BASENAME=mremap -c mm/mremap.c -o mm/mremap.o
+cc -DKBUILD_BASENAME=numa -c mm/numa.c -o mm/numa.o
+cc -DKBUILD_BASENAME=oom_kill -c mm/oom_kill.c -o mm/oom_kill.o
+cc -DKBUILD_BASENAME=page_alloc -c mm/page_alloc.c -o mm/page_alloc.o
+cc -DKBUILD_BASENAME=page_io -c mm/page_io.c -o mm/page_io.o
+cc -DKBUILD_BASENAME=shmem -c mm/shmem.c -o mm/shmem.o
+cc -DKBUILD_BASENAME=slab -c mm/slab.c -o mm/slab.o
+cc -DKBUILD_BASENAME=swap -c mm/swap.c -o mm/swap.o
+cc -DKBUILD_BASENAME=swap_state -c mm/swap_state.c -o mm/swap_state.o
+cc -DKBUILD_BASENAME=swapfile -c mm/swapfile.c -o mm/swapfile.o
+cc -DKBUILD_BASENAME=vmalloc -c mm/vmalloc.c -o mm/vmalloc.o
+cc -DKBUILD_BASENAME=vmscan -c mm/vmscan.c -o mm/vmscan.o
+cc -DKBUILD_BASENAME=p8023 -c net/802/p8023.c -o net/802/p8023.o
+cc -DKBUILD_BASENAME=sysctl_net_802 -c net/802/sysctl_net_802.c -o net/802/sysctl_net_802.o
+cc -DKBUILD_BASENAME=datagram -c net/core/datagram.c -o net/core/datagram.o
+cc -DKBUILD_BASENAME=dev -c net/core/dev.c -o net/core/dev.o
+cc -DKBUILD_BASENAME=dev_mcast -c net/core/dev_mcast.c -o net/core/dev_mcast.o
+cc -DKBUILD_BASENAME=dst -c net/core/dst.c -o net/core/dst.o
+cc -DKBUILD_BASENAME=ethtool -c net/core/ethtool.c -o net/core/ethtool.o
+cc -DKBUILD_BASENAME=iovec -c net/core/iovec.c -o net/core/iovec.o
+cc -DKBUILD_BASENAME=neighbour -c net/core/neighbour.c -o net/core/neighbour.o
+cc -DKBUILD_BASENAME=rtnetlink -c net/core/rtnetlink.c -o net/core/rtnetlink.o
+cc -DKBUILD_BASENAME=scm -c net/core/scm.c -o net/core/scm.o
+cc -DKBUILD_BASENAME=skbuff -c net/core/skbuff.c -o net/core/skbuff.o
+cc -DKBUILD_BASENAME=sock -c net/core/sock.c -o net/core/sock.o
+cc -DKBUILD_BASENAME=sysctl_net_core -c net/core/sysctl_net_core.c -o net/core/sysctl_net_core.o
+cc -DKBUILD_BASENAME=utils -c net/core/utils.c -o net/core/utils.o
+cc -DKBUILD_BASENAME=eth -c net/ethernet/eth.c -o net/ethernet/eth.o
+cc -DKBUILD_BASENAME=sysctl_net_ether -c net/ethernet/sysctl_net_ether.c -o net/ethernet/sysctl_net_ether.o
+cc -DKBUILD_BASENAME=af_inet -c net/ipv4/af_inet.c -o net/ipv4/af_inet.o
+cc -DKBUILD_BASENAME=arp -c net/ipv4/arp.c -o net/ipv4/arp.o
+cc -DKBUILD_BASENAME=devinet -c net/ipv4/devinet.c -o net/ipv4/devinet.o
+cc -DKBUILD_BASENAME=fib_frontend -c net/ipv4/fib_frontend.c -o net/ipv4/fib_frontend.o
+cc -DKBUILD_BASENAME=fib_hash -c net/ipv4/fib_hash.c -o net/ipv4/fib_hash.o
+cc -DKBUILD_BASENAME=fib_semantics -c net/ipv4/fib_semantics.c -o net/ipv4/fib_semantics.o
+cc -DKBUILD_BASENAME=icmp -c net/ipv4/icmp.c -o net/ipv4/icmp.o
+cc -DKBUILD_BASENAME=igmp -c net/ipv4/igmp.c -o net/ipv4/igmp.o
+cc -DKBUILD_BASENAME=inetpeer -c net/ipv4/inetpeer.c -o net/ipv4/inetpeer.o
+cc -DKBUILD_BASENAME=ip_forward -c net/ipv4/ip_forward.c -o net/ipv4/ip_forward.o
+cc -DKBUILD_BASENAME=ip_fragment -c net/ipv4/ip_fragment.c -o net/ipv4/ip_fragment.o
+cc -DKBUILD_BASENAME=ip_input -c net/ipv4/ip_input.c -o net/ipv4/ip_input.o
+cc -DKBUILD_BASENAME=ip_options -c net/ipv4/ip_options.c -o net/ipv4/ip_options.o
+cc -DKBUILD_BASENAME=ip_output -c net/ipv4/ip_output.c -o net/ipv4/ip_output.o
+cc -DKBUILD_BASENAME=ip_sockglue -c net/ipv4/ip_sockglue.c -o net/ipv4/ip_sockglue.o
+cc -DKBUILD_BASENAME=proc -c net/ipv4/proc.c -o net/ipv4/proc.o
+cc -DKBUILD_BASENAME=protocol -c net/ipv4/protocol.c -o net/ipv4/protocol.o
+cc -DKBUILD_BASENAME=raw -c net/ipv4/raw.c -o net/ipv4/raw.o
+cc -DKBUILD_BASENAME=route -c net/ipv4/route.c -o net/ipv4/route.o
+cc -DKBUILD_BASENAME=sysctl_net_ipv4 -c net/ipv4/sysctl_net_ipv4.c -o net/ipv4/sysctl_net_ipv4.o
+cc -DKBUILD_BASENAME=tcp -c net/ipv4/tcp.c -o net/ipv4/tcp.o
+cc -DKBUILD_BASENAME=tcp_diag -c net/ipv4/tcp_diag.c -o net/ipv4/tcp_diag.o
+cc -DKBUILD_BASENAME=tcp_input -c net/ipv4/tcp_input.c -o net/ipv4/tcp_input.o
+cc -DKBUILD_BASENAME=tcp_ipv4 -c net/ipv4/tcp_ipv4.c -o net/ipv4/tcp_ipv4.o
+cc -DKBUILD_BASENAME=tcp_minisocks -c net/ipv4/tcp_minisocks.c -o net/ipv4/tcp_minisocks.o
+cc -DKBUILD_BASENAME=tcp_output -c net/ipv4/tcp_output.c -o net/ipv4/tcp_output.o
+cc -DKBUILD_BASENAME=tcp_timer -c net/ipv4/tcp_timer.c -o net/ipv4/tcp_timer.o
+cc -DKBUILD_BASENAME=udp -c net/ipv4/udp.c -o net/ipv4/udp.o
+cc -DKBUILD_BASENAME=utils -c net/ipv4/utils.c -o net/ipv4/utils.o
+cc -DKBUILD_BASENAME=af_netlink -c net/netlink/af_netlink.c -o net/netlink/af_netlink.o
+cc -DKBUILD_BASENAME=af_packet -c net/packet/af_packet.c -o net/packet/af_packet.o
+cc -DKBUILD_BASENAME=sch_generic -c net/sched/sch_generic.c -o net/sched/sch_generic.o
+cc -DKBUILD_BASENAME=socket -c net/socket.c -o net/socket.o
+cc -DKBUILD_BASENAME=sysctl_net -c net/sysctl_net.c -o net/sysctl_net.o
+cc -DKBUILD_BASENAME=af_unix -c net/unix/af_unix.c -o net/unix/af_unix.o
+cc -DKBUILD_BASENAME=garbage -c net/unix/garbage.c -o net/unix/garbage.o
+cc -DKBUILD_BASENAME=sysctl_net_unix -c net/unix/sysctl_net_unix.c -o net/unix/sysctl_net_unix.o
+cc -DKBUILD_BASENAME=dummycon -c drivers/video/dummycon.c -o drivers/video/dummycon.o
+cc -DKBUILD_BASENAME=fbcmap -c drivers/video/fbcmap.c -o drivers/video/fbcmap.o
+cc -DKBUILD_BASENAME=fbcon_cfb16 -c drivers/video/fbcon-cfb16.c -o drivers/video/fbcon-cfb16.o
+cc -DKBUILD_BASENAME=fbcon_cfb24 -c drivers/video/fbcon-cfb24.c -o drivers/video/fbcon-cfb24.o
+cc -DKBUILD_BASENAME=fbcon_cfb32 -c drivers/video/fbcon-cfb32.c -o drivers/video/fbcon-cfb32.o
+cc -DKBUILD_BASENAME=fbcon_cfb8 -c drivers/video/fbcon-cfb8.c -o drivers/video/fbcon-cfb8.o
+cc -DKBUILD_BASENAME=fbcon -c drivers/video/fbcon.c -o drivers/video/fbcon.o
+cc -DKBUILD_BASENAME=fbmem -c drivers/video/fbmem.c -o drivers/video/fbmem.o
+cc -DKBUILD_BASENAME=font_8x16 -c drivers/video/font_8x16.c -o drivers/video/font_8x16.o
+cc -DKBUILD_BASENAME=font_8x8 -c drivers/video/font_8x8.c -o drivers/video/font_8x8.o
+cc -DKBUILD_BASENAME=fonts -c drivers/video/fonts.c -o drivers/video/fonts.o
+cc -DKBUILD_BASENAME=modedb -c drivers/video/modedb.c -o drivers/video/modedb.o
+cc -DKBUILD_BASENAME=vesafb -c drivers/video/vesafb.c -o drivers/video/vesafb.o
+tcc -ar cr arch/i386/lib/lib.a arch/i386/lib/checksum.o arch/i386/lib/delay.o arch/i386/lib/getuser.o arch/i386/lib/memcpy.o arch/i386/lib/old-checksum.o arch/i386/lib/strstr.o arch/i386/lib/usercopy.o
+tcc -ar cr lib/lib.a lib/brlock.o lib/bust_spinlocks.o lib/cmdline.o lib/crc32.o lib/ctype.o lib/dec_and_lock.o lib/dump_stack.o lib/errno.o lib/rbtree.o lib/rwsem.o lib/string.o lib/tcc-helpers.o lib/vsprintf.o
+mkdir -p /boot
+linux24-link -nostdlib -static -Wl,-Ttext,0x80100000 -o /boot/vmlinux-linux24 arch/i386/kernel/head.o kernel/kexec.o arch/i386/kernel/machine_kexec.o arch/i386/kernel/relocate_kernel.o arch/i386/kernel/bluesmoke.o arch/i386/kernel/dmi_scan.o arch/i386/kernel/entry.o arch/i386/kernel/i386_ksyms.o arch/i386/kernel/i387.o arch/i386/kernel/i8259.o arch/i386/kernel/init_task.o arch/i386/kernel/ioport.o arch/i386/kernel/irq.o arch/i386/kernel/ldt.o arch/i386/kernel/pci-dma.o arch/i386/kernel/process.o arch/i386/kernel/ptrace.o arch/i386/kernel/semaphore.o arch/i386/kernel/setup.o arch/i386/kernel/signal.o arch/i386/kernel/sys_i386.o arch/i386/kernel/time.o arch/i386/kernel/traps.o arch/i386/kernel/vm86.o arch/i386/mm/extable.o arch/i386/mm/fault.o arch/i386/mm/init.o arch/i386/mm/ioremap.o arch/i386/mm/pageattr.o drivers/block/blkpg.o drivers/block/elevator.o drivers/block/floppy.o drivers/block/genhd.o drivers/block/ll_rw_blk.o drivers/block/loop.o drivers/block/rd.o drivers/cdrom/cdrom.o drivers/char/console.o drivers/char/consolemap.o drivers/char/consolemap_deftbl.o drivers/char/defkeymap.o drivers/char/keyboard.o drivers/char/mem.o drivers/char/misc.o drivers/char/n_tty.o drivers/char/pc_keyb.o drivers/char/pty.o drivers/char/random.o drivers/char/raw.o drivers/char/selection.o drivers/char/serial.o drivers/char/tty_io.o drivers/char/tty_ioctl.o drivers/char/vc_screen.o drivers/char/vt.o drivers/ide/ide-cd.o drivers/ide/ide-default.o drivers/ide/ide-disk.o drivers/ide/ide-geometry.o drivers/ide/ide-io.o drivers/ide/ide-iops.o drivers/ide/ide-lib.o drivers/ide/ide-probe-mini.o drivers/ide/ide-probe.o drivers/ide/ide-proc.o drivers/ide/ide-taskfile.o drivers/ide/ide.o drivers/net/Space.o drivers/net/auto_irq.o drivers/net/dummy.o drivers/net/loopback.o drivers/net/net_init.o drivers/net/setup.o drivers/video/dummycon.o drivers/video/fbcmap.o drivers/video/fbcon-cfb16.o drivers/video/fbcon-cfb24.o drivers/video/fbcon-cfb32.o drivers/video/fbcon-cfb8.o drivers/video/fbcon.o drivers/video/fbmem.o drivers/video/font_8x16.o drivers/video/font_8x8.o drivers/video/fonts.o drivers/video/modedb.o drivers/video/vesafb.o drivers/video/vgacon.o fs/attr.o fs/bad_inode.o fs/binfmt_elf.o fs/binfmt_script.o fs/block_dev.o fs/buffer.o fs/char_dev.o fs/dcache.o fs/devices.o fs/devpts/inode.o fs/devpts/root.o fs/dnotify.o fs/exec.o fs/ext2/balloc.o fs/ext2/bitmap.o fs/ext2/dir.o fs/ext2/file.o fs/ext2/fsync.o fs/ext2/ialloc.o fs/ext2/inode.o fs/ext2/ioctl.o fs/ext2/namei.o fs/ext2/super.o fs/ext2/symlink.o fs/fcntl.o fs/fifo.o fs/file.o fs/file_table.o fs/filesystems.o fs/inode.o fs/iobuf.o fs/ioctl.o fs/isofs/dir.o fs/isofs/inode.o fs/isofs/namei.o fs/isofs/rock.o fs/isofs/util.o fs/locks.o fs/namei.o fs/namespace.o fs/open.o fs/partitions/check.o fs/partitions/msdos.o fs/pipe.o fs/proc/array.o fs/proc/base.o fs/proc/generic.o fs/proc/inode.o fs/proc/kcore.o fs/proc/kmsg.o fs/proc/proc_misc.o fs/proc/proc_tty.o fs/proc/root.o fs/quota.o fs/ramfs/inode.o fs/read_write.o fs/readdir.o fs/romfs/inode.o fs/select.o fs/seq_file.o fs/stat.o fs/super.o fs/xattr.o init/do_mounts.o init/main.o init/version.o ipc/msg.o ipc/sem.o ipc/shm.o ipc/util.o kernel/acct.o kernel/capability.o kernel/context.o kernel/dma.o kernel/exec_domain.o kernel/exit.o kernel/fork.o kernel/info.o kernel/itimer.o kernel/kmod.o kernel/module.o kernel/panic.o kernel/printk.o kernel/ptrace.o kernel/resource.o kernel/sched.o kernel/signal.o kernel/softirq.o kernel/sys.o kernel/sysctl.o kernel/time.o kernel/timer.o kernel/uid16.o kernel/user.o mm/bootmem.o mm/filemap.o mm/highmem.o mm/memory.o mm/mlock.o mm/mmap.o mm/mprotect.o mm/mremap.o mm/numa.o mm/oom_kill.o mm/page_alloc.o mm/page_io.o mm/shmem.o mm/slab.o mm/swap.o mm/swap_state.o mm/swapfile.o mm/vmalloc.o mm/vmscan.o net/802/p8023.o net/802/sysctl_net_802.o net/core/datagram.o net/core/dev.o net/core/dev_mcast.o net/core/dst.o net/core/ethtool.o net/core/iovec.o net/core/neighbour.o net/core/rtnetlink.o net/core/scm.o net/core/skbuff.o net/core/sock.o net/core/sysctl_net_core.o net/core/utils.o net/ethernet/eth.o net/ethernet/sysctl_net_ether.o net/ipv4/af_inet.o net/ipv4/arp.o net/ipv4/devinet.o net/ipv4/fib_frontend.o net/ipv4/fib_hash.o net/ipv4/fib_semantics.o net/ipv4/icmp.o net/ipv4/igmp.o net/ipv4/inetpeer.o net/ipv4/ip_forward.o net/ipv4/ip_fragment.o net/ipv4/ip_input.o net/ipv4/ip_options.o net/ipv4/ip_output.o net/ipv4/ip_sockglue.o net/ipv4/proc.o net/ipv4/protocol.o net/ipv4/raw.o net/ipv4/route.o net/ipv4/sysctl_net_ipv4.o net/ipv4/tcp.o net/ipv4/tcp_diag.o net/ipv4/tcp_input.o net/ipv4/tcp_ipv4.o net/ipv4/tcp_minisocks.o net/ipv4/tcp_output.o net/ipv4/tcp_timer.o net/ipv4/udp.o net/ipv4/utils.o net/netlink/af_netlink.o net/packet/af_packet.o net/sched/sch_generic.o net/socket.o net/sysctl_net.o net/unix/af_unix.o net/unix/garbage.o net/unix/sysctl_net_unix.o arch/i386/lib/lib.a lib/lib.a arch/i386/lib/lib.a
+cd ../..
+
+# Verify outputs from the complete Hex0 build.
+if match x${UPDATE_CHECKSUMS} xTrue; then
+    sha256sum -o ${pkg}.checksums /boot/vmlinux-linux24
+    cp ${pkg}.checksums ${SRCDIR}
+else
+    sha256sum -c ${pkg}.checksums
+fi

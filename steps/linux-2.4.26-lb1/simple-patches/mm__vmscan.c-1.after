@@ -1,0 +1,7 @@
+
+static void FASTCALL(refill_inactive(int nr_pages, zone_t * classzone));
+static int FASTCALL(shrink_cache(int nr_pages, zone_t * classzone, unsigned int gfp_mask, int * failed_swapout));
+static int __attribute__((regparm(3))) shrink_cache(int nr_pages, zone_t * classzone, unsigned int gfp_mask, int * failed_swapout)
+{
+	struct list_head * entry;
+	int max_scan = (classzone->nr_inactive_pages + classzone->nr_active_pages) / vm_cache_scan_ratio;

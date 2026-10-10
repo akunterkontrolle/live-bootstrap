@@ -1,0 +1,7 @@
+	__remove_wait_queue(q, &wait);				\
+	wq_write_unlock_irqrestore(&q->lock,flags);
+
+void __attribute__((regparm(3))) interruptible_sleep_on(wait_queue_head_t *q)
+{
+	SLEEP_ON_VAR
+

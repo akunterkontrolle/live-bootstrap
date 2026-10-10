@@ -1,0 +1,7 @@
+ * that namei follows links, while lnamei does not.
+ * SMP-safe
+ */
+int __user_walk(const char *name, unsigned flags, struct nameidata *nd)
+{
+	char *tmp;
+	int err;

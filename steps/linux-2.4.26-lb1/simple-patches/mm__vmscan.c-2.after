@@ -1,0 +1,7 @@
+ * We move them the other way when we see the
+ * reference bit on the page.
+ */
+static void __attribute__((regparm(3))) refill_inactive(int nr_pages, zone_t * classzone)
+{
+	struct list_head * entry;
+	unsigned long ratio;

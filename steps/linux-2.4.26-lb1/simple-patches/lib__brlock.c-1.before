@@ -1,0 +1,7 @@
+		write_lock(&__brlock_array[cpu_logical_map(i)][idx]);
+}
+
+void __br_write_unlock (enum brlock_indices idx)
+{
+	int i;
+

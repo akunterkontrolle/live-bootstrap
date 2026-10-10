@@ -1,0 +1,7 @@
+	return vaddr;
+}
+
+void *__attribute__((regparm(3))) kmap_high(struct page *page, int nonblocking)
+{
+	unsigned long vaddr;
+

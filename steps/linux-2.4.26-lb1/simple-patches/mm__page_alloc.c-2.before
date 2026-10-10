@@ -1,0 +1,7 @@
+}
+
+#ifndef CONFIG_DISCONTIGMEM
+struct page *_alloc_pages(unsigned int gfp_mask, unsigned int order)
+{
+	return __alloc_pages(gfp_mask, order,
+		contig_page_data.node_zonelists+(gfp_mask & GFP_ZONEMASK));

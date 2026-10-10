@@ -1,0 +1,7 @@
+ * Work out if there are any other processes sharing this
+ * swap cache page. Free it if you can. Return success.
+ */
+int remove_exclusive_swap_page(struct page *page)
+{
+	int retval;
+	struct swap_info_struct * p;

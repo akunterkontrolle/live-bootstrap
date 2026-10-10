@@ -1,0 +1,7 @@
+	return 0;
+}
+
+int __attribute__((regparm(3))) try_to_free_pages(unsigned int gfp_mask)
+{
+	pg_data_t *pgdat;
+	zonelist_t *zonelist;

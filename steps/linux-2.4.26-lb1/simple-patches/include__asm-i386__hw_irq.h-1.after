@@ -1,0 +1,7 @@
+asmlinkage void IRQ_NAME(nr); \
+__asm__( \
+"\n"__ALIGN_STR"\n" \
+".globl " SYMBOL_NAME_STR(IRQ) #nr "_interrupt\n\t"\
+SYMBOL_NAME_STR(IRQ) #nr "_interrupt:\n\t" \
+	"pushl $"#nr"-256\n\t" \
+	"jmp common_interrupt");

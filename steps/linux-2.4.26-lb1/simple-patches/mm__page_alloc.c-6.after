@@ -1,0 +1,7 @@
+	return (unsigned long) page_address(page);
+}
+
+unsigned long __attribute__((regparm(3))) get_zeroed_page(unsigned int gfp_mask)
+{
+	struct page * page;
+

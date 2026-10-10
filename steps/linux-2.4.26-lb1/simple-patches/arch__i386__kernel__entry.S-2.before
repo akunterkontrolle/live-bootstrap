@@ -1,0 +1,7 @@
+	ALIGN
+v86_signal_return:
+	call SYMBOL_NAME(save_v86_state)
+	movl %eax,%esp
+	xorl %edx,%edx
+	call SYMBOL_NAME(do_signal)
+	jmp restore_all

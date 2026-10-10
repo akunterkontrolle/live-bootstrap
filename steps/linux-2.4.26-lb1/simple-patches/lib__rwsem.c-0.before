@@ -1,0 +1,7 @@
+
+#if RWSEM_DEBUG
+#undef rwsemtrace
+void rwsemtrace(struct rw_semaphore *sem, const char *str)
+{
+	printk("sem=%p\n",sem);
+	printk("(sem)=%08lx\n",sem->count);

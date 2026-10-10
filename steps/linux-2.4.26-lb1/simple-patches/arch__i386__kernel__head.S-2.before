@@ -1,0 +1,12 @@
+ENTRY(swapper_pg_dir)
+	.long 0x00102007
+	.long 0x00103007
+	.fill BOOT_USER_PGD_PTRS-2,4,0
+	/* default: 766 entries */
+	.long 0x00102007
+	.long 0x00103007
+	/* default: 254 entries */
+	.fill BOOT_KERNEL_PGD_PTRS-2,4,0
+
+/*
+ * The page tables are initialized to only 8MB here - the final page

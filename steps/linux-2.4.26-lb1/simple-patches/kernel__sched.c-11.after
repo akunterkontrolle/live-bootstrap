@@ -1,0 +1,7 @@
+	SLEEP_ON_TAIL
+}
+
+long __attribute__((regparm(3))) sleep_on_timeout(wait_queue_head_t *q, long timeout)
+{
+	SLEEP_ON_VAR
+	

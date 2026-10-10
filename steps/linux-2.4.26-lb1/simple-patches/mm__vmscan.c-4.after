@@ -1,0 +1,7 @@
+
+static int check_classzone_need_balance(zone_t * classzone);
+
+int __attribute__((regparm(3))) try_to_free_pages_zone(zone_t *classzone, unsigned int gfp_mask)
+{
+	gfp_mask = pf_gfp_mask(gfp_mask);
+

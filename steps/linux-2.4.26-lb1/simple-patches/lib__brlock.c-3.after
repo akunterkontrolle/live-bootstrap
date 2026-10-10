@@ -1,0 +1,7 @@
+		}
+}
+
+void __attribute__((regparm(3))) __br_write_unlock(enum brlock_indices idx)
+{
+	spin_unlock(&__br_write_locks[idx].lock);
+}

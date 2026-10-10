@@ -1,0 +1,7 @@
+ * More important, however, is the fact that this allows us much
+ * more flexibility.
+ */
+void __attribute__((regparm(3))) __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+{
+	struct thread_struct *prev = &prev_p->thread,
+				 *next = &next_p->thread;

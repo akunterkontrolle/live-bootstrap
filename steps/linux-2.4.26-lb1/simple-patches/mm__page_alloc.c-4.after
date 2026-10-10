@@ -1,0 +1,7 @@
+/*
+ * This is the 'heart' of the zoned buddy allocator:
+ */
+struct page * __attribute__((regparm(3))) __alloc_pages(unsigned int gfp_mask, unsigned int order, zonelist_t *zonelist)
+{
+	zone_t **zone, * classzone;
+	struct page * page;

@@ -1,0 +1,7 @@
+		return 0;
+}
+
+void fput(struct file * file)
+{
+	struct dentry * dentry = file->f_dentry;
+	struct vfsmount * mnt = file->f_vfsmnt;

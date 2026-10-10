@@ -1,0 +1,7 @@
+ * lru_cache_add: add a page to the page lists
+ * @page: the page to add
+ */
+void lru_cache_add(struct page * page)
+{
+	if (!PageLRU(page)) {
+		spin_lock(&pagemap_lru_lock);

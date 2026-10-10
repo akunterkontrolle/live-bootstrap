@@ -1,0 +1,7 @@
+	return vaddr;
+}
+
+void *kmap_high(struct page *page, int nonblocking)
+{
+	unsigned long vaddr;
+

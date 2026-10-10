@@ -1,0 +1,7 @@
+}
+
+static int FASTCALL(invalidate_list_pages2(struct list_head *));
+static int invalidate_list_pages2(struct list_head *head)
+{
+	struct list_head *curr;
+	struct page * page;

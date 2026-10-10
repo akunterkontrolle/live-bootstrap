@@ -1,0 +1,8 @@
+	ret = 0;
+	if ((old_flags^flags)&IFF_UP)	/* Bit is different  ? */
+	{
+		ret = ((old_flags & IFF_UP) ? dev_close : dev_open)(dev);
+
+		if (ret == 0) 
+			dev_mc_upload(dev);
+	}

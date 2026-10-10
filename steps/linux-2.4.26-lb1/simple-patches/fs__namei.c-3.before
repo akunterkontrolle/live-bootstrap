@@ -1,0 +1,7 @@
+
+
+/* SMP-safe */
+int path_init(const char *name, unsigned int flags, struct nameidata *nd)
+{
+	nd->last_type = LAST_ROOT; /* if there are only slashes... */
+	nd->flags = flags;

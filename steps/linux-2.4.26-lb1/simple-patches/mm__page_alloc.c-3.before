@@ -1,0 +1,7 @@
+#endif
+
+static struct page * FASTCALL(balance_classzone(zone_t *, unsigned int, unsigned int, int *));
+static struct page * balance_classzone(zone_t * classzone, unsigned int gfp_mask, unsigned int order, int * freed)
+{
+	struct page * page = NULL;
+	int __freed;

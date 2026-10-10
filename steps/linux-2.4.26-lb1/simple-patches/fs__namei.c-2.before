@@ -1,0 +1,7 @@
+}
+
+/* SMP-safe */
+int path_lookup(const char *path, unsigned flags, struct nameidata *nd)
+{
+	int error = 0;
+	if (path_init(path, flags, nd))

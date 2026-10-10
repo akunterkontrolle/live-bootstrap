@@ -1,0 +1,13 @@
+	return 0;
+}
+
+void __attribute__((regparm(3))) __free_pages(struct page *page, unsigned int order)
+{
+	if (!PageReserved(page) && put_page_testzero(page))
+		__free_pages_ok(page, order);
+}
+
+void __attribute__((regparm(3))) free_pages(unsigned long addr, unsigned int order)
+{
+	if (addr != 0)
+		__free_pages(virt_to_page(addr), order);

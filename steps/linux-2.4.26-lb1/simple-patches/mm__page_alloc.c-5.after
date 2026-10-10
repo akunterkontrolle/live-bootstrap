@@ -1,0 +1,7 @@
+/*
+ * Common helper functions.
+ */
+unsigned long __attribute__((regparm(3))) __get_free_pages(unsigned int gfp_mask, unsigned int order)
+{
+	struct page * page;
+

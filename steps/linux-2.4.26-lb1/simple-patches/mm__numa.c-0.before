@@ -1,0 +1,7 @@
+ * This can be refined. Currently, tries to do round robin, instead
+ * should do concentratic circle search, starting from current node.
+ */
+struct page * _alloc_pages(unsigned int gfp_mask, unsigned int order)
+{
+	struct page *ret = 0;
+	pg_data_t *start, *temp;

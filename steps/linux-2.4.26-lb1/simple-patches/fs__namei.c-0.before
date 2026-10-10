@@ -1,0 +1,7 @@
+ *
+ * We expect 'base' to be positive and a directory.
+ */
+int link_path_walk(const char * name, struct nameidata *nd)
+{
+	struct dentry *dentry;
+	struct inode *inode;

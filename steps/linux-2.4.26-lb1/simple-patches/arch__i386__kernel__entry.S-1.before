@@ -1,0 +1,8 @@
+	pushl %ecx; \
+	pushl %ebx; \
+	movl $(__KERNEL_DS),%edx; \
+	movl %edx,%ds; \
+	movl %edx,%es;
+
+#define RESTORE_ALL	\
+	popl %ebx;	\

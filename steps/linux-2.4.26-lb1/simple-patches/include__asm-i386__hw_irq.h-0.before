@@ -1,0 +1,6 @@
+asmlinkage void call_do_IRQ(void); \
+__asm__( \
+	"\n" __ALIGN_STR"\n" \
+	"common_interrupt:\n\t" \
+	SAVE_ALL \
+	SYMBOL_NAME_STR(call_do_IRQ)":\n\t" \

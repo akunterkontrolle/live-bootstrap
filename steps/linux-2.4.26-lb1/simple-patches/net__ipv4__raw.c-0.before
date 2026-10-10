@@ -1,0 +1,6 @@
+	u32 daddr;
+	u8  tos;
+	int err;
+
+	/* This check is ONLY to check for arithmetic overflow
+	   on integer(!) len. Not more! Real check will be made

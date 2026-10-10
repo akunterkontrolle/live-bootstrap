@@ -1,0 +1,7 @@
+#define CLUSTER_OFFSET(x)	(((x) >> page_cluster) << page_cluster)
+
+static void FASTCALL(add_page_to_hash_queue(struct page * page, struct page **p));
+static void __attribute__((regparm(3))) add_page_to_hash_queue(struct page * page, struct page **p)
+{
+	struct page *next = *p;
+

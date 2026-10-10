@@ -1,0 +1,7 @@
+ * of the waiters for all of the pages in the appropriate
+ * wait queue are woken.
+ */
+void __attribute__((regparm(3))) unlock_page(struct page *page)
+{
+	wait_queue_head_t *waitqueue = page_waitqueue(page);
+	ClearPageLaunder(page);

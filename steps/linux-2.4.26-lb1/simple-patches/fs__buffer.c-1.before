@@ -1,0 +1,7 @@
+	return bh;
+}
+
+void buffer_insert_list(struct buffer_head *bh, struct list_head *list)
+{
+	spin_lock(&lru_list_lock);
+	if (buffer_attached(bh))

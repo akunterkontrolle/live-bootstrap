@@ -1,0 +1,7 @@
+	}
+}
+
+struct file * fget(unsigned int fd)
+{
+	struct file * file;
+	struct files_struct *files = current->files;

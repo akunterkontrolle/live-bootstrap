@@ -1,0 +1,7 @@
+	local_irq_restore(flags);
+}
+
+void __attribute__((regparm(3))) __tasklet_hi_schedule(struct tasklet_struct *t)
+{
+	int cpu = smp_processor_id();
+	unsigned long flags;

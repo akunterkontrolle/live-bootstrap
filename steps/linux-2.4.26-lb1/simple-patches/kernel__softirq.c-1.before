@@ -1,0 +1,7 @@
+		wakeup_softirqd(cpu);
+}
+
+void raise_softirq(unsigned int nr)
+{
+	unsigned long flags;
+

@@ -1,0 +1,7 @@
+ *
+ * In all cases the return value is guaranteed to be non-negative.
+ */
+signed long schedule_timeout(signed long timeout)
+{
+	struct timer_list timer;
+	unsigned long expire;

@@ -1,0 +1,7 @@
+ * during blocking operations..
+ */
+static struct page * FASTCALL(__find_lock_page_helper(struct address_space *, unsigned long, struct page *));
+static struct page * __attribute__((regparm(3))) __find_lock_page_helper(struct address_space *mapping,
+					unsigned long offset, struct page *hash)
+{
+	struct page *page;

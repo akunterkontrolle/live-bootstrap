@@ -1,0 +1,7 @@
+ * lru_cache_del: remove a page from the page lists
+ * @page: the page to remove
+ */
+void lru_cache_del(struct page * page)
+{
+	spin_lock(&pagemap_lru_lock);
+	__lru_cache_del(page);

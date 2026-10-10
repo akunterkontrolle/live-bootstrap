@@ -1,0 +1,7 @@
+	}
+}
+
+struct file * __attribute__((regparm(3))) fget(unsigned int fd)
+{
+	struct file * file;
+	struct files_struct *files = current->files;

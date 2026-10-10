@@ -1,0 +1,7 @@
+ *
+ * Called from do_try_to_free_pages() and __alloc_pages()
+ */
+int __attribute__((regparm(3))) kmem_cache_reap(int gfp_mask)
+{
+	slab_t *slabp;
+	kmem_cache_t *searchp;

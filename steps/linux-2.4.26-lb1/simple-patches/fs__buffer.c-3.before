@@ -1,0 +1,13 @@
+
+/* atomic version, the user must call balance_dirty() by hand
+   as soon as it become possible to block */
+void __mark_buffer_dirty(struct buffer_head *bh)
+{
+	if (!atomic_set_buffer_dirty(bh))
+		__mark_dirty(bh);
+}
+
+void mark_buffer_dirty(struct buffer_head *bh)
+{
+	if (!atomic_set_buffer_dirty(bh)) {
+		if (block_dump)

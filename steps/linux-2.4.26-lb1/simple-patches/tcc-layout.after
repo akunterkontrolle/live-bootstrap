@@ -1,0 +1,3 @@
+#include "linux24-layout.h"
+
+static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,

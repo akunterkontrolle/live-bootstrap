@@ -1,0 +1,7 @@
+ */
+static int FASTCALL(read_cluster_nonblocking(struct file * file, unsigned long offset,
+					     unsigned long filesize));
+static int read_cluster_nonblocking(struct file * file, unsigned long offset,
+	unsigned long filesize)
+{
+	unsigned long pages = CLUSTER_PAGES;

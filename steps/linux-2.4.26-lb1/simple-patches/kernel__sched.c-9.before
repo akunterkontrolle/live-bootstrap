@@ -1,0 +1,7 @@
+	SLEEP_ON_TAIL
+}
+
+long interruptible_sleep_on_timeout(wait_queue_head_t *q, long timeout)
+{
+	SLEEP_ON_VAR
+

@@ -1,0 +1,7 @@
+}
+
+static FASTCALL(struct page * rmqueue(zone_t *zone, unsigned int order));
+static struct page * __attribute__((regparm(3))) rmqueue(zone_t *zone, unsigned int order)
+{
+	free_area_t * area = zone->free_area + order;
+	unsigned int curr_order = order;
