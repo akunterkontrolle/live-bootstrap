@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 akunterkontrolle
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -ex
+mkdir build
+cd build
+tcc -static -m32 -I${SRCDIR}/tcc-0.9.27/build/tcc-0.9.27/include -o ${BINDIR}/kexec-linux24 ../files/kexec-linux24.c
+
+cd ..
+
+# Verify outputs from the complete Hex0 build.
+if match x${UPDATE_CHECKSUMS} xTrue; then
+    sha256sum -o ${pkg}.checksums /usr/bin/kexec-linux24
+    cp ${pkg}.checksums ${SRCDIR}
+else
+    sha256sum -c ${pkg}.checksums
+fi
