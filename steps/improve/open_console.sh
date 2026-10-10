@@ -7,5 +7,5 @@
 if bash --version | grep -q 'GPLv3'; then
     env - PATH=${PREFIX}/bin PS1="\w # " openvt -- bash -i
 else
-    bash -c 'while true; do printf "[early Bash - use Ctrl+D] $(pwd) # "; eval "$(cat /dev/tty2)"; done' &> /dev/tty2 &
+    bash -c 'while true; do printf "[early Bash] $PWD # "; if ! read -r cmd; then sleep 1; continue; fi; eval "$cmd"; done' </dev/tty2 &> /dev/tty2 &
 fi
