@@ -46,8 +46,29 @@
 #include "../blockdev/linux/file_dev.h"
 #include "../blockdev/windows/file_windows.h"
 
+#include "linux24-gzip.h"
+
 #define BLOCK_SIZE 1024
 #define FILENAME_LENGTH 1024
+
+/*
+ * The builder keeps source files above 0x54000000 while compiling. Once the
+ * build has reached this helper, most process snapshots have been released.
+ * Compact the live file pool into that reclaimed low memory before reserving
+ * the Linux image. The image then fits below the T440p's last usable low-RAM
+ * address rather than being appended above 2 GiB.
+ */
+#define BUILDER_FILE_TABLE 0x01000000u
+#define BUILDER_FILE_NAMES 0x00fffc00u
+#define BUILDER_FILE_POOL 0x54000000u
+#define COMPACTED_FILE_POOL 0x15000000u
+#define SAVED_PROCESS_POOL 0x30000000u
+#define BUILDER_NEXT_FILE 0x00008307u
+#define BUILDER_NEXT_SAVE 0x000085ffu
+#define INITRD_LOW_MEMORY_END 0x7f617000u
+#define INITRD_SAVE_GUARD 0x04000000u
+#define INITRD_ALIGNMENT 0x01000000u
+#define HANDOFF_POOL_GAP 0x01000000u
 
 const char *input_name = NULL;
 /**@brief   Block device handle.*/
@@ -55,6 +76,216 @@ static struct ext4_blockdev *bd;
 /**@brief   Block cache handle.*/
 static struct ext4_bcache *bc;
 static struct ext4_fs fs;
+static unsigned int compacted_file_end;
+
+static unsigned int align_up(unsigned int value, unsigned int alignment)
+{
+	return (value + alignment - 1) & ~(alignment - 1);
+}
+
+static bool compact_builder_file_pool(unsigned int initrd_size,
+				      unsigned int *initrd_address)
+{
+	unsigned int old_end;
+	unsigned int pool_size;
+	unsigned int compacted_end;
+	unsigned int saved_end;
+	unsigned int image_end;
+	unsigned int process_num;
+	unsigned int process_desc;
+	unsigned int active_brk;
+	int filenum;
+	unsigned int filename_addr;
+	unsigned int file_addr;
+	volatile unsigned int *next_file;
+	volatile unsigned int *next_save;
+
+	next_file = (volatile unsigned int *) BUILDER_NEXT_FILE;
+	next_save = (volatile unsigned int *) BUILDER_NEXT_SAVE;
+	old_end = *next_file;
+	if (old_end < BUILDER_FILE_POOL) {
+		puts("Linux initrd error: file pool ends below its configured base");
+		return false;
+	}
+	/* Compact live files only: the append-only pool also contains dead tarballs. */
+	compacted_end = COMPACTED_FILE_POOL;
+	process_num = *((unsigned int *) 0x0000866d);
+	if (process_num < 2 || process_num > 16) return false;
+	process_desc = 0x00020000u + (process_num - 1) * 0x1000u;
+	active_brk = *((unsigned int *) (process_desc + 4));
+	if (active_brk > COMPACTED_FILE_POOL - 0x04000000u) {
+		puts("Linux initrd error: active process overlaps compacted pool");
+		return false;
+	}
+	/* The builder does not implement unlink: rm leaves the expanded input tar
+	 * in its append-only table. It is no longer needed after kernel linking. */
+	for (filenum = 14335, filename_addr = BUILDER_FILE_NAMES,
+	     file_addr = BUILDER_FILE_TABLE + 0x37ff4;
+	     filenum >= 3;
+	     filenum--, filename_addr -= FILENAME_LENGTH, file_addr -= 16) {
+		if (!strcmp((char *)filename_addr,
+		    "/steps/linux-2.4.26-lb1/build/linux-2.4.26.tar")) {
+			((char *)filename_addr)[0] = 0;
+			*((unsigned int *)(file_addr + 4)) = 0;
+		}
+	}
+	/* Validate all ranges and the total before moving bytes. */
+	for (filenum = 14335, filename_addr = BUILDER_FILE_NAMES,
+	     file_addr = BUILDER_FILE_TABLE + 0x37ff4;
+	     filenum >= 3;
+	     filenum--, filename_addr -= FILENAME_LENGTH, file_addr -= 16) {
+		unsigned int address = *((unsigned int *)file_addr);
+		unsigned int length = *((unsigned int *)(file_addr + 4));
+		if (((char *)filename_addr)[0] != '/' || !length) continue;
+		if ((address < BUILDER_FILE_POOL && strcmp((char *)filename_addr, "/e820")) || address >= old_end ||
+		    length > old_end - address || length > SAVED_PROCESS_POOL - compacted_end) {
+			puts("Linux initrd error: live file pool exceeds reclaimed space");
+			return false;
+		}
+		compacted_end += length;
+	}
+	compacted_file_end = compacted_end;
+	compacted_end = COMPACTED_FILE_POOL;
+	for (filenum = 14335, filename_addr = BUILDER_FILE_NAMES,
+	     file_addr = BUILDER_FILE_TABLE + 0x37ff4;
+	     filenum >= 3;
+	     filenum--, filename_addr -= FILENAME_LENGTH, file_addr -= 16) {
+		unsigned int address = *((unsigned int *)file_addr);
+		unsigned int length = *((unsigned int *)(file_addr + 4));
+		if (((char *)filename_addr)[0] != '/' || !length) continue;
+		memcpy((void *)compacted_end,(void *)address,length);
+		*((unsigned int *)file_addr) = compacted_end;
+		compacted_end += length;
+	}
+	pool_size = compacted_end - COMPACTED_FILE_POOL;
+	saved_end = *next_save;
+	if (saved_end > 0xffffffffu - INITRD_SAVE_GUARD - INITRD_ALIGNMENT) {
+		puts("Linux initrd error: saved-process range overflows");
+		return false;
+	}
+	*initrd_address = align_up(saved_end + INITRD_SAVE_GUARD,
+				   INITRD_ALIGNMENT);
+	if (*initrd_address >= INITRD_LOW_MEMORY_END) {
+		puts("Linux initrd error: no T440p low RAM remains for image");
+		return false;
+	}
+	if (initrd_size > (INITRD_LOW_MEMORY_END - *initrd_address) / BLOCK_SIZE) {
+		puts("Linux initrd error: requested image exceeds T440p low RAM");
+		return false;
+	}
+	image_end = *initrd_address + initrd_size * BLOCK_SIZE;
+	if (image_end > INITRD_LOW_MEMORY_END) {
+		puts("Linux initrd error: image end exceeds T440p low RAM");
+		return false;
+	}
+
+	*next_file = *initrd_address;
+	printf("Compacted source pool: 0x%08x-0x%08x (%u bytes)\n",
+	       COMPACTED_FILE_POOL, compacted_end, pool_size);
+	printf("Reserved Linux image: 0x%08x-0x%08x (%u bytes)\n",
+	       *initrd_address, image_end, initrd_size * BLOCK_SIZE);
+	return true;
+}
+
+/* Stage2 clears the active-process window before loading the next command.
+ * Keep only the files needed by the immediate Linux handoff above that window
+ * and beyond the initrd, then rebase those file-table entries. */
+static bool preserve_linux24_handoff_files(unsigned int initrd_address,
+					 unsigned int initrd_size)
+{
+	static const char *required[] = {
+		"/usr/bin/match",
+		"/usr/bin/kexec-linux24",
+		"/boot/vmlinux-linux24",
+		"/boot/linux24.ext2",
+		"/e820",
+	};
+	unsigned int image_end;
+	unsigned int handoff_address;
+	unsigned int handoff_end;
+	unsigned int filename_addr;
+	unsigned int file_addr;
+	volatile unsigned int *next_file;
+	unsigned int i;
+
+	image_end = initrd_address + initrd_size * BLOCK_SIZE;
+	if (image_end > 0xffffffffu - HANDOFF_POOL_GAP - INITRD_ALIGNMENT) {
+		puts("Linux handoff error: image end overflows address space");
+		return false;
+	}
+	handoff_address = align_up(image_end + HANDOFF_POOL_GAP,
+				   INITRD_ALIGNMENT);
+	if (handoff_address >= INITRD_LOW_MEMORY_END) {
+		puts("Linux handoff error: no low RAM remains after initrd");
+		return false;
+	}
+	handoff_end = handoff_address;
+
+	for (i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
+		int filenum;
+		bool found = false;
+
+		for (filenum = 14335, filename_addr = BUILDER_FILE_NAMES,
+			 file_addr = BUILDER_FILE_TABLE + 0x37ff4;
+		     filenum >= 3;
+		     filenum--, filename_addr -= FILENAME_LENGTH, file_addr -= 16) {
+			unsigned int address;
+			unsigned int length;
+
+			if (strcmp((char *) filename_addr, required[i]))
+				continue;
+			found = true;
+			address = *((unsigned int *) file_addr);
+			length = *((unsigned int *) (file_addr + 4));
+			if (address >= COMPACTED_FILE_POOL &&
+			    address < compacted_file_end) {
+				if (length > compacted_file_end - address) {
+					puts("Linux handoff error: file exceeds compacted pool");
+					return false;
+				}
+			} else if (!strcmp(required[i], "/boot/linux24.ext2") &&
+				   address == initrd_address &&
+				   length <= initrd_size * BLOCK_SIZE) {
+				/* The helper created this file directly at the reserved image. */
+			} else {
+				if (!strcmp(required[i], "/boot/linux24.ext2") ||
+				    address > INITRD_LOW_MEMORY_END ||
+				    length > INITRD_LOW_MEMORY_END - address ||
+				    (address < image_end &&
+				     address + length > initrd_address)) {
+					printf("Linux handoff error: invalid %s at %08x len %08x\n",
+					       required[i], address, length);
+					return false;
+				}
+			}
+			if (strcmp(required[i], "/boot/linux24.ext2") ||
+			    address != initrd_address) {
+				if (handoff_end > INITRD_LOW_MEMORY_END ||
+				    length > INITRD_LOW_MEMORY_END - handoff_end) {
+					puts("Linux handoff error: handoff files exceed low RAM");
+					return false;
+				}
+				memcpy((void *) handoff_end, (const void *) address, length);
+				*((unsigned int *) file_addr) = handoff_end;
+				handoff_end = align_up(handoff_end + length, 16);
+			}
+			break;
+		}
+		if (!found) {
+			printf("Linux handoff error: missing %s\n", required[i]);
+			return false;
+		}
+	}
+	if (handoff_end > INITRD_LOW_MEMORY_END) {
+		puts("Linux handoff error: handoff pool exceeds low RAM");
+		return false;
+	}
+	next_file = (volatile unsigned int *) BUILDER_NEXT_FILE;
+	*next_file = handoff_end;
+	printf("Preserved Linux handoff files: 0x%08x-0x%08x\n",
+	       handoff_address, handoff_end);
+	return true;
+}
 
 
 static struct ext4_mkfs_info info = {
@@ -131,7 +362,12 @@ bool lwext4_umount(void)
 bool copy_file(char *src_path, char *dest_path)
 {
 	ext4_file dest_file;
+	FILE *src_file;
+	char buffer[16384];
 	int err;
+	int read_len;
+	int read_failed;
+
 	err = ext4_inode_exist(dest_path, EXT4_DE_UNKNOWN);
 	if (err == EOK) {
 		/* file already copied or directory already created */
@@ -140,36 +376,35 @@ bool copy_file(char *src_path, char *dest_path)
 
 	printf("copy_file: %s\n", src_path);
 
-	FILE *src_file = fopen(src_path, "rb");
+	src_file = fopen(src_path, "rb");
 	if (!src_file) {
 		printf("fopen '%s' error.\n", src_path);
 		return EXIT_FAILURE;
-	}
-	fseek(src_file, 0, SEEK_END);
-	int src_len = ftell(src_file);
-
-	fseek(src_file, 0, SEEK_SET);
-
-	char * src_mem = malloc(src_len);
-	int read_len = fread(src_mem, src_len, 1, src_file);
-	fclose(src_file);
-	if (read_len < 1) {
-		printf("src fread error file: '%s' read count: %d\n", src_path, read_len);
 	}
 
 	err = ext4_fopen(&dest_file, dest_path, "wb");
 	if (err != EOK) {
 		printf("ext4_open error: %d\n", err);
+		fclose(src_file);
 		return EXIT_FAILURE;
 	}
 
-	if (src_len > 0) {
-		err = ext4_fwrite(&dest_file, src_mem, src_len, 0);
+	read_failed = 0;
+	while (1) {
+		/* Keep the helper's heap below the relocated live source pool. */
+		read_len = fread(buffer, 1, sizeof(buffer), src_file);
+		if (read_len == 0)
+			break;
+		err = ext4_fwrite(&dest_file, buffer, read_len, 0);
 		if (err != EOK) {
 			printf("ext4_fwrite error: %d\n", err);
-			return EXIT_FAILURE;
+			read_failed = 1;
+			break;
 		}
 	}
+	fclose(src_file);
+	if (read_failed)
+		return EXIT_FAILURE;
 
 	err = ext4_fclose(&dest_file);
 	if (err != EOK) {
@@ -177,7 +412,7 @@ bool copy_file(char *src_path, char *dest_path)
 		return EXIT_FAILURE;
 	}
 
-	free(src_mem);
+	return EXIT_SUCCESS;
 }
 
 bool copy_file_system()
@@ -187,16 +422,18 @@ bool copy_file_system()
 	/* +4 to account for /mp and null termination */
 	char dst_filename[FILENAME_LENGTH + 4];
 	for (filenum = 14335, filename_addr = 0xfffc00; filenum >= 3; filenum--, filename_addr -= FILENAME_LENGTH) {
-		/* Avoid including fiwix.ext2 in itself */
+		/* Avoid including linux24.ext2 in itself */
 		if (((char *) filename_addr)[0] != '/' ||
 			!strcmp((char *) filename_addr, "/") ||
-			!strcmp((char *) filename_addr, "/boot/fiwix.ext2")) {
+			!strcmp((char *) filename_addr, "/boot/linux24.ext2")) {
 			continue;
 		}
 		strcpy(dst_filename, "/mp");
 		strcat(dst_filename, (char *) filename_addr);
-		copy_file((char *) filename_addr, dst_filename);
+		if (copy_file((char *)filename_addr, dst_filename) != EXIT_SUCCESS)
+			return false;
 	}
+	return true;
 }
 
 int main(int argc, char **argv)
@@ -206,25 +443,10 @@ int main(int argc, char **argv)
 	char zeros[BLOCK_SIZE];
 
 	unsigned int next_file_address;
-	int filenum;
-	unsigned int filename_addr;
-	unsigned int file_addr;
 	unsigned int initrd_size;
 	int i;
 
-	next_file_address = 0x54000000;
-	for (filenum = 14335, filename_addr = 0xfffc00, file_addr = 0x1037FF4;
-		 filenum >= 3;
-		 filenum--, filename_addr -= FILENAME_LENGTH, file_addr -= 16) {
-		if (((char *) filename_addr)[0] == '/') {
-			next_file_address = *((unsigned int *) file_addr);
-			next_file_address += *((unsigned int *) (file_addr + 4));
-			break;
-		}
-	}
-
-	/* Create zeroed out disk image file */
-	input_name = "/boot/fiwix.ext2";
+	input_name = "/boot/linux24.ext2";
 	initrd_size = 262144;
 
 	for (i = 1; i < argc; i++) {
@@ -235,6 +457,8 @@ int main(int argc, char **argv)
 			input_name = argv[i];
 		}
 	}
+	if (!compact_builder_file_pool(initrd_size, &next_file_address))
+		return EXIT_FAILURE;
 
 	printf("Starting %s at addr 0x%08x\n", input_name, next_file_address);
 
@@ -313,11 +537,48 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	copy_file_system();
+	if (!copy_file_system()) return EXIT_FAILURE;
 
 	if (!lwext4_umount())
 		return EXIT_FAILURE;
+	if (!preserve_linux24_handoff_files(next_file_address, initrd_size))
+		return EXIT_FAILURE;
 
-	puts("Fiwix ext2 initrd created successfully.");
+    /* The ext2 driver expects low-memory RAM-disk backing pages. Compress
+     * the boot image so its input and the 1GiB expanded disk fit together.
+     * All files needed after this helper have already been preserved above
+     * the raw image, so this temporary output may reclaim the source pool. */
+    {
+        volatile unsigned int *next_file = (volatile unsigned int *)BUILDER_NEXT_FILE;
+        unsigned int preserved_end = *next_file;
+        unsigned int process_num = *((unsigned int *)0x0000866d);
+        unsigned int active_brk = *((unsigned int *)(0x00020000u +
+                                      (process_num - 1) * 0x1000u + 4));
+        unsigned int temporary = align_up(active_brk + INITRD_SAVE_GUARD,
+                                          INITRD_ALIGNMENT);
+        unsigned int compressed;
+        FILE *image;
+        if (temporary < 0x10000000u) temporary = 0x10000000u;
+        if (temporary >= SAVED_PROCESS_POOL) return EXIT_FAILURE;
+        compressed = gzip_image((unsigned char *)next_file_address,
+                                initrd_size * BLOCK_SIZE,
+                                (unsigned char *)temporary,
+                                SAVED_PROCESS_POOL - temporary);
+        if (!compressed) {
+            puts("Linux initrd error: compressed image exceeds temporary pool");
+            return EXIT_FAILURE;
+        }
+        *next_file = next_file_address;
+        image = fopen("/boot/linux24.ext2.gz", "wb");
+        if (!image) return EXIT_FAILURE;
+        if (fwrite((void *)temporary, 1, compressed, image) != compressed) {
+            fclose(image); return EXIT_FAILURE;
+        }
+        if (fclose(image)) return EXIT_FAILURE;
+        *next_file = preserved_end;
+        printf("Compressed Linux initrd: %u bytes at 0x%08x\n",
+               compressed, next_file_address);
+    }
+	puts("Linux ext2 initrd created successfully.");
 	return EXIT_SUCCESS;
 }
