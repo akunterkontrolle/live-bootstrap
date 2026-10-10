@@ -15,7 +15,7 @@ get_source_filename() {
 # List all packages from linux kernel onwards
 # Ideally, we would use arrays here, but they are not supported by
 # the bash version we have at this point.
-pkgs="$(awk '/^build:/ { print $2 }' "${SRCDIR}/manifest" | awk '/^linux-[0-9]/,EOF { print $0 }')"
+pkgs="$(awk '/^build:/ { print $2 }' "${SRCDIR}/manifest" | awk '/^linux-[0-9]/ && $0 !~ /^linux-2[.]4[.]/ { after_bridge = 1 } after_bridge { print }')"
 
 # Gather source names for all packages in pkgs, which we want to keep
 keep_sources=""
