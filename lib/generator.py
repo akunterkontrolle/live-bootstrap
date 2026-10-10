@@ -14,6 +14,8 @@ import random
 import shutil
 import tarfile
 import traceback
+import subprocess
+import tempfile
 
 import requests
 
@@ -242,10 +244,9 @@ class Generator():
                       encoding="utf-8") as infile:
                 for line in infile:
                     image_file.write(bytes.fromhex(line.split('#')[0].split(';')[0].strip()))
-            # Append stage2 hex0 source
-            with open(os.path.join('builder-hex0', 'builder-hex0-x86-stage2.hex0'),
-                      encoding="utf-8") as infile:
-                image_file.write(infile.read().encode())
+            # Apply maintained downstream patches to a temporary stage2 copy.
+            # Keep the submodule checkout at its pinned, unmodified revision.
+            image_file.write(self._patched_builder_hex0_stage2())
 
         # Close first with statement before getting file size.
         with open(image_file_name, 'ab') as image_file:
@@ -270,6 +271,54 @@ class Generator():
         if current_size < size * megabyte:
             with open(image_file_name, 'ab') as image_file:
                 image_file.truncate(size * megabyte)
+
+    def _patched_builder_hex0_stage2(self):
+        """Return stage2 source with the repository's local patches applied."""
+        stage2_path = os.path.join(
+            self.git_dir, 'builder-hex0', 'builder-hex0-x86-stage2.hex0'
+        )
+        patch_dir = os.path.abspath(os.path.join(
+            self.git_dir, 'bootstrap-patches', 'builder-hex0'
+        ))
+        patches = sorted(
+            os.path.join(patch_dir, name)
+            for name in os.listdir(patch_dir)
+            if name.endswith('.patch')
+        )
+
+        with open(stage2_path, 'rb') as source_file:
+            source = source_file.read()
+
+        if not patches:
+            return source
+
+        with tempfile.TemporaryDirectory(prefix='live-bootstrap-builder-') as workdir:
+            staged_source = os.path.join(workdir, 'builder-hex0-x86-stage2.hex0')
+            with open(staged_source, 'wb') as source_file:
+                source_file.write(source)
+
+            for patch_file in patches:
+                for check in (True, False):
+                    command = ['git', 'apply', '--unidiff-zero']
+                    if check:
+                        command.append('--check')
+                    command.append(patch_file)
+                    result = subprocess.run(
+                        command,
+                        cwd=workdir,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode:
+                        detail = result.stderr.strip() or result.stdout.strip()
+                        action = 'check' if check else 'apply'
+                        raise RuntimeError(
+                            f"Unable to {action} {os.path.basename(patch_file)}: {detail}"
+                        )
+
+            with open(staged_source, 'rb') as source_file:
+                return source_file.read()
 
     @staticmethod
     def check_file(file_name, expected_hash):
