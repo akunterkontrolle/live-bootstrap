@@ -1,0 +1,19 @@
+diff --git a/builder-hex0-x86-stage2.hex0 b/builder-hex0-x86-stage2.hex0
+index 6554ffe..8d078b1 100644
+--- a/builder-hex0-x86-stage2.hex0
++++ b/builder-hex0-x86-stage2.hex0
+@@ -630 +630,3 @@ C6 43 05 8E               # mov byte [ebx + 5], flags = 8E
+-# load the interrupt table
++# Load the interrupt table. BIOS calls temporarily enable interrupts in real
++# mode; keep them disabled again after returning to protected mode because
++# this IDT only has IRQ0 and int 80h handlers.
+@@ -636 +638 @@ FA                        # cli
+-FB                        # sti
++FA                        # cli; never re-enable unhandled hardware IRQs here
+@@ -2433 +2435,2 @@ B9 FF 07 00 00             # mov ecx, 0x000007FF
+-# no more reading from disk - enable interrupts
++# no more reading from disk. Keep IF clear until a complete PIC/IDT is
++# installed by the next kernel stage; this IDT only handles IRQ0 and int 80h.
+@@ -2436 +2439 @@ A3 2C 81 00 00             # mov [have_userspace], eax
+-FB                         # sti
++FA                         # cli
