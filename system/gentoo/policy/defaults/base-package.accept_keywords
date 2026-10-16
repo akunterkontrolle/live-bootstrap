@@ -1,0 +1,2 @@
+# The selected firmware ebuild is ~amd64 in the pinned repository snapshot.
+=sys-kernel/linux-firmware-20260916 ~amd64

@@ -188,7 +188,7 @@ portage_emerge --pretend @world
         stages = [line.split('/stages/', 1)[1].split('"', 1)[0]
                   for line in driver.splitlines() if '/stages/' in line and '. ' in line]
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual(stages[-10:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh', '63-native-tool-floor.sh', '70-native-runtimes.sh', '71-native-portage.sh', '80-native-gentoo-system.sh'])
+        self.assertEqual(stages[-11:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh', '63-native-tool-floor.sh', '70-native-runtimes.sh', '71-native-portage.sh', '80-native-gentoo-system.sh', '90-native-base-runtime.sh'])
         prepare = (GENTOO / 'prepare.py').read_text()
         for name in ('lib/portage.sh', 'lib/manifests.sh', 'lib/portage-host.sh', 'lib/python.sh', 'probes/portage-integrity.py', 'sources/gentoo-repository.lock',
                      'sources/python.lock', 'sources/bzip2.lock', 'sources/portage.lock',
@@ -205,8 +205,28 @@ portage_emerge --pretend @world
                      'stages/system/60-gentoo-bootstrap.sh', 'stages/system/70-system.sh',
                      'stages/system/80-verify.sh', 'build-bootstrap-scanelf.sh',
                      'audit-resolved-sources.py', 'sources/native-xz-5.8.3.lock',
-                     'sources/native-tar-1.35.lock', 'sources/native-gawk-5.4.1.lock', 'sources/wget.lock'):
+                     'sources/native-tar-1.35.lock', 'sources/native-gawk-5.4.1.lock', 'sources/wget.lock',
+                     'stages/90-native-base-runtime.sh', 'policy/defaults/base-packages.list',
+                     'policy/defaults/base-package.use', 'policy/defaults/base-package.license',
+                     'policy/defaults/base-package.accept_keywords', 'policy/defaults/firmware-linux-firmware',
+                     'policy/90-encrypted-base-dracut.conf'):
             self.assertIn(repr(name), prepare)
+
+    def test_batch_nine_encrypted_base_policy_and_stage_contract(self):
+        stage = (GENTOO / 'stages/90-native-base-runtime.sh').read_text()
+        packages = (GENTOO / 'policy/defaults/base-packages.list').read_text()
+        self.assertLess(stage.index('run_emerge --pretend --tree'), stage.index('audit-resolved-sources.py'))
+        self.assertIn('run_emerge --pretend --fetchonly', stage)
+        self.assertIn('run_emerge --update --deep --newuse', stage)
+        self.assertIn('plan_is_empty "$STATE/native-base-runtime-world-plan.txt"', stage)
+        self.assertIn('grep -Fxq \'CONFIG_DM_CRYPT=y\'', stage)
+        self.assertIn('ACCEPT_LICENSE="-* @FREE"', stage)
+        for atom in ('sys-fs/cryptsetup', 'sys-fs/lvm2', 'sys-kernel/dracut',
+                     'net-misc/networkmanager', '=sys-kernel/linux-firmware-20260916'):
+            self.assertIn(atom, packages)
+        use = (GENTOO / 'policy/defaults/base-package.use').read_text()
+        self.assertIn('sys-fs/cryptsetup argon2', use)
+        self.assertIn('sys-fs/lvm2 lvm', use)
 
     def test_batch_seven_native_runtime_and_portage_acceptance_inputs(self):
         runtime = (GENTOO / 'stages/native-runtime-build.sh').read_text()

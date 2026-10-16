@@ -1,0 +1,26 @@
+# Source-built runtime packages for the encrypted OpenRC base and recovery.
+app-admin/sudo
+app-admin/sysklogd
+app-crypt/gnupg
+app-misc/mc
+media-sound/alsa-utils
+net-misc/dhcpcd
+net-misc/networkmanager
+net-wireless/iw
+net-wireless/wpa_supplicant
+=sys-kernel/linux-firmware-20260916
+sys-apps/hdparm
+sys-apps/gptfdisk
+sys-apps/kbd
+sys-apps/less
+sys-apps/pciutils
+sys-apps/util-linux
+sys-apps/usbutils
+sys-apps/systemd-utils[udev]
+sys-fs/cryptsetup
+sys-fs/e2fsprogs
+sys-fs/lvm2
+sys-kernel/dracut
+sys-libs/timezone-data
+sys-process/psmisc
+sys-apps/smartmontools

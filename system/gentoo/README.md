@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–7
+# Gentoo continuation — batches 1–9
 
 ## Prerequisites and ownership
 
@@ -112,9 +112,11 @@ bundle into an already booted build environment remains manual during review.
    and verifies Linux 6.12.111, x86_64, a boot ID different from the kernel's build boot, and the GNU build ID
    from `/sys/kernel/notes` matching the saved vmlinux build ID. It then completes
    the multilib C/C++ toolchain and executes both ABIs (batch 4), then builds
-   the pinned repository, host Python and Portage configuration (batch 5).
-   No package emerge runs yet. After an interruption, repeat steps 5–6; completed
-   builds keep their receipts.
+   the pinned repository, host Python and Portage configuration (batch 5),
+   constructs the native compiler and runtimes (batches 6–7), bootstraps Gentoo's
+   multilib `@system` (batch 8), and installs the encrypted-base runtime policy
+   (batch 9). Package emerge begins in batch 8. After an interruption, repeat
+   steps 5–6; completed stages keep their receipts.
 
 ## T440p command sequence
 
@@ -687,3 +689,34 @@ the complete generated input bundle, SHA256 manifest verification, Bash
 syntax and the existing Gentoo regression fixtures. They do not execute the
 Gentoo bootstrap or a full `@system` merge in a fresh VM; those remain part of
 the final replay acceptance.
+
+## Batch 9 encrypted-base runtime
+
+Stage 90 runs only after the first source-built multilib `@system` receipt. It
+installs the reviewed encrypted-base package set into the native root: OpenRC
+recovery and administration tools, cryptsetup with Argon2, LVM, networking,
+firmware, dracut, and the selected filesystem and device utilities. The default
+package, USE, license, keyword and firmware savedconfig files are explicit
+bundle inputs; the existing TOML package paths can replace each policy. The
+license transition narrows the bootstrap's temporary `*` allowance to
+`-* @FREE`, with a single redistributable firmware exception.
+
+Before merging, the stage validates the selected atoms with Portage, checks the
+saved modern kernel config for built-in dm-crypt, device mapper and ext4, plans
+the closure, and records a source audit. It fetches the source archives before
+merging, uses the established no-test/source-only Portage settings, checks the
+pinned repository and Manifests around each emerge, and requires `@world` to
+be converged afterward. Acceptance checks cover installed package atoms,
+cryptsetup Argon2 and LVM USE, OpenRC/networking/recovery commands and the
+dracut policy. Portage concurrency remains independently controlled by the
+three existing settings; it is left out of the recipe fingerprint.
+
+The package files and stage logs, plans, source audit and receipts remain on
+the workspace, so interruption resumes with the same `bash gentoo.sh build`
+command and bundle. The stage changes only the native build root; storage
+initialization and installation into an encrypted target remain for batch 10.
+VM execution uses the launcher-recorded scratch filesystem; hardware uses the
+existing workspace scratch directory and its larger free-space requirement.
+Static checks validate the package policy, stage order, bundle manifest and
+shell syntax. A fresh guest merge has not yet been run and remains part of the
+final VM replay.

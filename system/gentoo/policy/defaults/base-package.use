@@ -1,0 +1,8 @@
+# Require Argon2id for the encrypted-root LUKS2 policy.
+sys-fs/cryptsetup argon2
+# Build LVM commands as well as the device-mapper libraries.
+sys-fs/lvm2 lvm
+# NetworkManager uses wpa_supplicant over D-Bus.
+net-wireless/wpa_supplicant dbus
+# Keep firmware selection limited to the reviewed savedconfig payload.
+=sys-kernel/linux-firmware-20260916 savedconfig redistributable -initramfs

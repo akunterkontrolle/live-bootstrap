@@ -1,0 +1,2 @@
+# Only this explicitly selected firmware package receives the redistributable exception.
+=sys-kernel/linux-firmware-20260916 linux-fw-redistributable

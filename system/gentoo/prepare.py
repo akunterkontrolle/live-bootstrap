@@ -51,6 +51,7 @@ BUNDLE_FILES = (
     'sources/native-file-5.48.lock',
     'stages/native-runtime-build.sh', 'stages/70-native-runtimes.sh',
     'stages/71-native-portage.sh', 'stages/80-native-gentoo-system.sh',
+    'stages/90-native-base-runtime.sh',
     'lib/native-gentoo-system.sh',
     'stages/system/10-prepare.sh', 'stages/system/20-runtime-and-downloader.sh',
     'stages/system/30-bootstrap-prerequisites.sh', 'stages/system/40-runtime-providers.sh',
@@ -61,6 +62,9 @@ BUNDLE_FILES = (
     'sources/native-gawk-5.4.1.lock', 'sources/wget.lock',
     'sources/zlib.lock', 'sources/openssl.lock',
     'sources/libffi.lock', 'sources/perl.lock',
+    'policy/defaults/base-packages.list', 'policy/defaults/base-package.use',
+    'policy/defaults/base-package.license', 'policy/defaults/base-package.accept_keywords',
+    'policy/defaults/firmware-linux-firmware', 'policy/90-encrypted-base-dracut.conf',
 )
 
 

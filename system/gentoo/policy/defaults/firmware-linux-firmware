@@ -1,0 +1,4 @@
+# Intel 7260 Wi-Fi: Linux 6.12.111 iwlwifi cfg/7000.c requires API 17.
+iwlwifi-7260-17.ucode
+# Intel 7260 USB Bluetooth, legacy ROM fallback for platform 0x37/variant 0x07.
+intel/ibt-hw-37.7.bseq
