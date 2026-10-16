@@ -1,0 +1,2 @@
+# Host extractor needed to unpack the pinned GNU make archive.
+lzip-1.26.tar.gz|https://download.savannah.gnu.org/releases/lzip/lzip-1.26.tar.gz|sha512=df99d7c9ce932486aec64fe9f9c378a9f98300deac6f6065c9543006cf35daeb52b419316d4672c182acbd0c8105388267947dfc9267965697d521259d59a0ad

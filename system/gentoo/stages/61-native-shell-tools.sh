@@ -48,11 +48,25 @@ native_tools_action() {
     # compiler pass; configure and make themselves still run on the host.
     native_build_one bash-5.3.tar.gz sources/native-bash.lock bash-5.3 bash --version '--without-bash-malloc'
     native_build_one coreutils-9.11.tar.xz sources/native-coreutils.lock coreutils-9.11 env --version '--enable-install-program=hostname'
+    if [ -e "$NATIVE_ROOT/bin/bash" ] || [ -L "$NATIVE_ROOT/bin/bash" ]; then
+        [ "$(readlink "$NATIVE_ROOT/bin/bash" 2>/dev/null || true)" = ../usr/bin/bash ] ||
+            gentoo_die 'unexpected native /bin/bash; refusing to replace it'
+    else
+        ln -s ../usr/bin/bash "$NATIVE_ROOT/bin/bash"
+    fi
+    if [ -e "$NATIVE_ROOT/bin/sh" ] || [ -L "$NATIVE_ROOT/bin/sh" ]; then
+        [ "$(readlink "$NATIVE_ROOT/bin/sh" 2>/dev/null || true)" = bash ] ||
+            gentoo_die 'unexpected native /bin/sh; refusing to replace it'
+    else
+        ln -s bash "$NATIVE_ROOT/bin/sh"
+    fi
 }
 native_tools_verify() {
     [ -x "$NATIVE_ROOT/usr/bin/bash" ] && [ -x "$NATIVE_ROOT/usr/bin/env" ] || return 1
     native_verify_elf "$NATIVE_ROOT/usr/bin/bash" ELF64 || return 1
     native_verify_elf "$NATIVE_ROOT/usr/bin/env" ELF64 || return 1
+    [ "$(readlink "$NATIVE_ROOT/bin/bash")" = ../usr/bin/bash ] &&
+        [ "$(readlink "$NATIVE_ROOT/bin/sh")" = bash ] || return 1
     native_run "$NATIVE_ROOT/usr/bin/bash" --version >/dev/null &&
         native_run "$NATIVE_ROOT/usr/bin/env" --version >/dev/null
 }

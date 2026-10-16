@@ -97,3 +97,9 @@ Gentoo repository Manifests. Native binutils
 and GCC reuse the batch-2 source locks, so this stage does not create a second
 compiler source lineage. The compiler recipe selects the Gentoo multilib
 library paths and its output checks cover ELF32 and ELF64.
+
+The batch-6 native tool floor adds independently locked GNU m4, ncurses,
+diffutils, File, findutils, gawk, grep, gzip, make, patch, sed, tar, and xz sources.
+Their SHA512 values come from the reviewed experimental source locks. GNU
+make's lzip-compressed release is handled by a separately pinned host lzip
+build; no system package manager is used to unpack or build these tools.

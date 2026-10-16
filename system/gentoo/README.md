@@ -609,14 +609,18 @@ is left for inspection instead of being overlaid again. Stage 61 cross-builds
 Bash 5.3 and coreutils 9.11 into that root from their individually pinned
 archives. Their ELF64 outputs are run through the root's glibc loader before
 the stage receipt is written. Stage 62 then builds native binutils and GCC
-16.2.0 in the proven build order. Its probes compile and execute ELF32 and
-ELF64 C programs using the native root loader. The sources, build trees, and
+16.2.0 in the proven build order. Its probes compile and execute C and C++
+programs as ELF32 and ELF64. Stage 63 completes the native temporary-tool
+floor: m4, ncurses, diffutils, file, findutils, gawk, grep, gzip, make, patch,
+sed, tar, and xz. GNU make's lzip archive is unpacked with a separately
+source-built host lzip. Each target tool is run through the native root's
+glibc loader before its receipt is written. The sources, build trees, and
 receipts live on the workspace. Resume with the same bundle and workspace
-after an interruption. The pass-two build follows the reference's GNU
-multilib layout: `/usr/lib32` and `/usr/lib64` are explicit, and GCC bootstrap,
-OpenMP and non-C/C++ runtimes remain disabled at this temporary-tool stage.
+after an interruption. The compiler build fixes Gentoo's multilib layout at
+`/usr/lib32` and `/usr/lib64`; GCC bootstrap, OpenMP and non-C/C++ runtimes
+remain disabled at this temporary-tool stage.
 
 No ebuild or emerge operation is started by these stages. Source-built
 `scanelf` is added before the first package operation that requires it.
-Compiler execution has not been tested in a fresh guest; these source stages
+The native builds have not been executed in a fresh guest; these source stages
 are validated here by static order, bundle, pin and shell checks only.

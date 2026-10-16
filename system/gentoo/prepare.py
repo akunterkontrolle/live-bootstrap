@@ -40,6 +40,15 @@ BUNDLE_FILES = (
     'lib/native.sh', 'stages/60-native-root.sh',
     'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh',
     'sources/native-bash.lock', 'sources/native-coreutils.lock',
+    'lib/native-tools.sh', 'stages/63-native-tool-floor.sh',
+    'sources/native-m4-1.4.21.lock', 'sources/native-ncurses-6.6.lock',
+    'sources/native-diffutils-3.12.lock', 'sources/native-findutils-4.11.0.lock',
+    'sources/native-gawk-5.4.1.lock', 'sources/native-grep-3.12.lock',
+    'sources/native-gzip-1.14.lock', 'sources/native-lzip-1.26.lock',
+    'sources/native-make-4.4.1.lock', 'sources/native-patch-2.8.lock',
+    'sources/native-sed-4.10.lock', 'sources/native-tar-1.35.lock',
+    'sources/native-xz-5.8.3.lock',
+    'sources/native-file-5.48.lock',
 )
 
 
