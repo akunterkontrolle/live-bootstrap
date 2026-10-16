@@ -1,0 +1,2 @@
+# archive|HTTPS URL|pinned digest; see SOURCES.md for provenance
+rsync-3.5.1.tar.gz|https://rsync.samba.org/ftp/rsync/src/rsync-3.5.1.tar.gz|sha512=76f3c60eb12bbde9dd0edfb35c2584526298efea8eace446cbfc11791a593e3716daae313ae6ea30598c03f6c30f38492a4248482351b807ba653a23c808a4aa

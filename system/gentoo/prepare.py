@@ -15,6 +15,15 @@ from lib.gentoo_config import load, render, root_image_gib
 BUNDLE_FILES = (
     'gentoo.sh', 'lib/common.sh', 'lib/devices.sh', 'lib/state.sh',
     'lib/sources.sh', 'stages/00-inputs.sh',
+    'lib/toolchain.sh', 'stages/10-host-preflight.sh',
+    'stages/11-binutils-elf.sh', 'stages/12-gcc-elf.sh',
+    'stages/13-host-tools.sh', 'stages/14-linux-headers.sh',
+    'stages/15-binutils-linux.sh', 'stages/16-gcc-linux-stage1.sh',
+    'stages/17-glibc-bootstrap.sh', 'stages/18-gcc-linux-runtime.sh',
+    'stages/19-glibc.sh', 'stages/20-verify-sysroot.sh',
+    'sources/binutils.lock', 'sources/gcc.lock', 'sources/glibc.lock',
+    'sources/linux.lock', 'sources/argp.lock', 'sources/elfutils.lock',
+    'sources/rsync.lock',
 )
 
 

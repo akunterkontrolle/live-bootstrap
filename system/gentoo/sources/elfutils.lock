@@ -1,0 +1,2 @@
+# archive|HTTPS URL|pinned digest; see SOURCES.md for provenance
+elfutils-0.196.tar.bz2|https://sourceware.org/elfutils/ftp/0.196/elfutils-0.196.tar.bz2|sha512=02a5c1aaeefb6264dd43c52e78612864a51275becf781c309beb398267e1e12f166fd7190a0d09f16e386a5fd14116dc49d1efe5a59191d22df0f46c19a081f7

@@ -1,0 +1,2 @@
+# archive|HTTPS URL|pinned digest; see SOURCES.md for provenance
+glibc-2.44.tar.xz|https://ftp.gnu.org/gnu/glibc/glibc-2.44.tar.xz|sha512=963dc0275f7738653379909b64ee32e28f13cca77440f2cf9bd0ab82cb183f6cd1f7376d25cc5442de69b972713bd81bf0e38dbcca9b2a4d6649843e76fd50a5

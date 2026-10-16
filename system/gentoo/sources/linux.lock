@@ -1,0 +1,2 @@
+# archive|HTTPS URL|pinned digest; see SOURCES.md for provenance
+linux-6.12.111.tar.xz|https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.111.tar.xz|sha512=9366fcea5bcdcd6294341da8dfbd1877ca9e2c4ae898eb86c0f1094ff881ec256908b2236c68e4d79b59492c91986ccf4f1f3818b151ce3a2721e3ce168974cf

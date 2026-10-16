@@ -14,14 +14,25 @@ gentoo_fingerprint() {
 }
 
 gentoo_run_stage() {
-    local stage=$1 fingerprint=$2 action=$3 verify=$4 receipt temporary
+    local stage=$1 fingerprint=$2 action=$3 verify=$4 receipt temporary started
     [[ "$stage" =~ ^[A-Za-z0-9_-]+$ && "$fingerprint" =~ ^[0-9a-f]{64}$ ]] || gentoo_die 'invalid stage identity'
     receipt="$WORK_ROOT/state/$stage.done"
+    started="$WORK_ROOT/state/$stage.inputs"
+    if [ -f "$started" ]; then
+        [ "$(cat "$started")" = "$fingerprint" ] || gentoo_die "$stage inputs changed since its first attempt; preserve this tree and use a fresh build lineage"
+    fi
     if [ -f "$receipt" ]; then
         [ "$(cat "$receipt")" = "$fingerprint" ] || gentoo_die "$stage inputs changed; inspect outputs and use a fresh build lineage"
         "$verify" || gentoo_die "$stage completed outputs failed verification; inspect before repair"
         printf 'Verified completed stage %s\n' "$stage"
         return
+    fi
+    if [ ! -f "$started" ]; then
+        temporary=$(mktemp "$WORK_ROOT/state/.$stage.inputs.XXXXXX")
+        printf '%s\n' "$fingerprint" > "$temporary"
+        sync
+        mv "$temporary" "$started"
+        sync
     fi
     printf 'Starting stage %s at %s\n' "$stage" "$(date -u +%FT%TZ)"
     # A subshell retains errexit for sequential commands; a failed action cannot
