@@ -37,6 +37,9 @@ BUNDLE_FILES = (
     'sources/bzip2.lock', 'sources/portage.lock',
     'stages/50-gentoo-sources.sh', 'stages/51-host-python.sh',
     'stages/52-portage-host.sh',
+    'lib/native.sh', 'stages/60-native-root.sh',
+    'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh',
+    'sources/native-bash.lock', 'sources/native-coreutils.lock',
 )
 
 

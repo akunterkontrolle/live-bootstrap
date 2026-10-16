@@ -86,3 +86,14 @@ completed host-toolchain inputs. A changed dependency fails the host-Python
 stage fingerprint. Portage source integrity also has a disposable digestcheck
 probe: valid bytes pass while corrupt bytes and missing or checksum-free entries
 fail, without modifying the Manifest fixture.
+
+# Batch 6 native-tool sources
+
+The native x86_64 root is seeded from the already verified GNU sysroot. Bash
+and coreutils are separately source-locked using the pins carried by the
+reviewed experimental LFS 13.1-systemd native-host sequence; both SHA512 pins
+were compared with the matching entries in the locally available pinned
+Gentoo repository Manifests. Native binutils
+and GCC reuse the batch-2 source locks, so this stage does not create a second
+compiler source lineage. The compiler recipe selects the Gentoo multilib
+library paths and its output checks cover ELF32 and ELF64.

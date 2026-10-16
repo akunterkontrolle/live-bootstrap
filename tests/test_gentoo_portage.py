@@ -188,11 +188,13 @@ portage_emerge --pretend @world
         stages = [line.split('/stages/', 1)[1].split('"', 1)[0]
                   for line in driver.splitlines() if '/stages/' in line and '. ' in line]
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual(stages[-3:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh'])
+        self.assertEqual(stages[-6:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh'])
         prepare = (GENTOO / 'prepare.py').read_text()
         for name in ('lib/portage.sh', 'lib/manifests.sh', 'lib/portage-host.sh', 'lib/python.sh', 'probes/portage-integrity.py', 'sources/gentoo-repository.lock',
                      'sources/python.lock', 'sources/bzip2.lock', 'sources/portage.lock',
-                     'stages/50-gentoo-sources.sh', 'stages/51-host-python.sh', 'stages/52-portage-host.sh'):
+                     'stages/50-gentoo-sources.sh', 'stages/51-host-python.sh', 'stages/52-portage-host.sh',
+                     'lib/native.sh', 'stages/60-native-root.sh', 'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh',
+                     'sources/native-bash.lock', 'sources/native-coreutils.lock'):
             self.assertIn(repr(name), prepare)
 
 

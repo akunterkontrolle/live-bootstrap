@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–5
+# Gentoo continuation — batches 1–6
 
 ## Prerequisites and ownership
 
@@ -54,7 +54,7 @@ bundle into an already booted build environment remains manual during review.
 
    ```sh
    python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode vm --output /tmp/gentoo-inputs-v5
+     --mode vm --output /tmp/gentoo-inputs-v6
    ```
 
 2. **Host, previous VM stopped:** put the original rootfs.py QEMU argument array
@@ -69,13 +69,13 @@ bundle into an already booted build environment remains manual during review.
    ```
 
 3. **Guest:** after the original bootstrap completes, transfer the complete
-   `/tmp/gentoo-inputs-v5` directory into the guest, preserving all files. Run:
+   `/tmp/gentoo-inputs-v6` directory into the guest, preserving all files. Run:
 
    ```sh
-   bash /tmp/gentoo-inputs-v5/gentoo.sh build
+   bash /tmp/gentoo-inputs-v6/gentoo.sh build
    ```
 
-   The driver builds/resumes batches 1–5 and prints **SHUTDOWN MILESTONE** after
+   The driver builds/resumes batches 1–6 and prints **SHUTDOWN MILESTONE** after
    verifying the kernel, matching modules, inputs and saved post-reboot scripts.
 
 4. **Guest console, explicit shutdown:** substitute the exact handoff path
@@ -124,14 +124,14 @@ bundle into an already booted build environment remains manual during review.
 
    ```sh
    python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode hardware --output /tmp/gentoo-hardware-inputs-v5
+     --mode hardware --output /tmp/gentoo-hardware-inputs-v6
    ```
 
 2. **T440p bootstrap environment:** with `/proc`, `/sys`, device links and the
    existing workspace available, run:
 
    ```sh
-   bash /tmp/gentoo-hardware-inputs-v5/gentoo.sh build
+   bash /tmp/gentoo-hardware-inputs-v6/gentoo.sh build
    ```
 
    The driver checks the workspace disk's by-id, serial, capacity and optional
@@ -591,7 +591,7 @@ prior-stage receipt. Completed compiler fingerprints do not include these new
 locks or helper files. If a source build is interrupted, resume with the same
 bundle and workspace. Changed unfinished recipes are refused. Batch 5 verifies
 the Portage command and source audit but does not run emerge or install packages;
-source-built `scanelf` and the native root are introduced in batch 6.
+the native root and native compiler are introduced in batch 6.
 
 Focused checks validate the source locks against the available pinned archives,
 Manifest snapshot mutation detection, the generated concurrency policy, bundle
@@ -599,3 +599,24 @@ completeness, dependency order, Python/shell syntax and prior Gentoo regression
 fixtures. They do not build Python inside the bootstrap guest or establish a
 fresh end-to-end Portage guest run. The full VM replay remains part of final
 acceptance.
+
+## Batch 6 native root and compiler
+
+After the modern-kernel handoff and Portage setup, stage 60 seeds
+`native-root-x86_64/` from the verified multilib sysroot. The copy is published
+by rename and tied to the sysroot receipt; an interrupted or unreceipted root
+is left for inspection instead of being overlaid again. Stage 61 cross-builds
+Bash 5.3 and coreutils 9.11 into that root from their individually pinned
+archives. Their ELF64 outputs are run through the root's glibc loader before
+the stage receipt is written. Stage 62 then builds native binutils and GCC
+16.2.0 in the proven build order. Its probes compile and execute ELF32 and
+ELF64 C programs using the native root loader. The sources, build trees, and
+receipts live on the workspace. Resume with the same bundle and workspace
+after an interruption. The pass-two build follows the reference's GNU
+multilib layout: `/usr/lib32` and `/usr/lib64` are explicit, and GCC bootstrap,
+OpenMP and non-C/C++ runtimes remain disabled at this temporary-tool stage.
+
+No ebuild or emerge operation is started by these stages. Source-built
+`scanelf` is added before the first package operation that requires it.
+Compiler execution has not been tested in a fresh guest; these source stages
+are validated here by static order, bundle, pin and shell checks only.
