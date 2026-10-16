@@ -157,7 +157,7 @@ done
         driver = (GENTOO / 'gentoo.sh').read_text()
         stages = re.findall(r'\. "\$SCRIPT_DIR/(stages/[^"]+)"', driver)
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual(stages[-3:], ['stages/60-native-root.sh', 'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh'])
+        self.assertEqual(stages[-6:], ['stages/60-native-root.sh', 'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh', 'stages/63-native-tool-floor.sh', 'stages/70-native-runtimes.sh', 'stages/71-native-portage.sh'])
         self.assertTrue(set(stages) <= set(prepare.BUNDLE_FILES))
         seen = set()
         for stage in stages:
@@ -171,11 +171,11 @@ done
         # name an actual version that the source recipes unpack/consume.
         for stage in stages:
             text = (GENTOO / stage).read_text()
-            for lock in re.findall(r'sources/[a-z-]+\.lock', text):
+            for lock in re.findall(r'sources/[A-Za-z0-9.-]+\.lock', text):
                 self.assertIn(lock, prepare.BUNDLE_FILES)
                 records = [line for line in (GENTOO / lock).read_text().splitlines() if line and not line.startswith('#')]
                 self.assertEqual(len(records), 1)
-                self.assertRegex(records[0], r'^[A-Za-z0-9.+_-]+\.tar\.(xz|gz|bz2|sign)\|https://[^|]+\|sha512=[a-f0-9]{128}$')
+                self.assertRegex(records[0], r'^[A-Za-z0-9.+_-]+\.tar\.(xz|gz|bz2|lz|sign)\|https://[^|]+\|sha512=[a-f0-9]{128}$')
 
     def test_compiler_fingerprint_stays_stable_when_adding_a_later_stage(self):
         snapshot = self.directory / 'snapshot'

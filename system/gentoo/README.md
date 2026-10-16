@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–6
+# Gentoo continuation — batches 1–7
 
 ## Prerequisites and ownership
 
@@ -54,7 +54,7 @@ bundle into an already booted build environment remains manual during review.
 
    ```sh
    python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode vm --output /tmp/gentoo-inputs-v6
+     --mode vm --output /tmp/gentoo-inputs-v7
    ```
 
 2. **Host, previous VM stopped:** put the original rootfs.py QEMU argument array
@@ -69,13 +69,13 @@ bundle into an already booted build environment remains manual during review.
    ```
 
 3. **Guest:** after the original bootstrap completes, transfer the complete
-   `/tmp/gentoo-inputs-v6` directory into the guest, preserving all files. Run:
+   `/tmp/gentoo-inputs-v7` directory into the guest, preserving all files. Run:
 
    ```sh
-   bash /tmp/gentoo-inputs-v6/gentoo.sh build
+   bash /tmp/gentoo-inputs-v7/gentoo.sh build
    ```
 
-   The driver builds/resumes batches 1–6 and prints **SHUTDOWN MILESTONE** after
+   The driver builds/resumes batches 1–7 and prints **SHUTDOWN MILESTONE** after
    verifying the kernel, matching modules, inputs and saved post-reboot scripts.
 
 4. **Guest console, explicit shutdown:** substitute the exact handoff path
@@ -124,14 +124,14 @@ bundle into an already booted build environment remains manual during review.
 
    ```sh
    python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode hardware --output /tmp/gentoo-hardware-inputs-v6
+     --mode hardware --output /tmp/gentoo-hardware-inputs-v7
    ```
 
 2. **T440p bootstrap environment:** with `/proc`, `/sys`, device links and the
    existing workspace available, run:
 
    ```sh
-   bash /tmp/gentoo-hardware-inputs-v6/gentoo.sh build
+   bash /tmp/gentoo-hardware-inputs-v7/gentoo.sh build
    ```
 
    The driver checks the workspace disk's by-id, serial, capacity and optional
@@ -591,7 +591,9 @@ prior-stage receipt. Completed compiler fingerprints do not include these new
 locks or helper files. If a source build is interrupted, resume with the same
 bundle and workspace. Changed unfinished recipes are refused. Batch 5 verifies
 the Portage command and source audit but does not run emerge or install packages;
-the native root and native compiler are introduced in batch 6.
+the native root and native compiler are introduced in batch 6. Batch 7 adds the
+native runtime libraries, Python, Perl and pinned Portage without starting an
+ebuild operation.
 
 Focused checks validate the source locks against the available pinned archives,
 Manifest snapshot mutation detection, the generated concurrency policy, bundle
@@ -624,3 +626,24 @@ No ebuild or emerge operation is started by these stages. Source-built
 `scanelf` is added before the first package operation that requires it.
 The native builds have not been executed in a fresh guest; these source stages
 are validated here by static order, bundle, pin and shell checks only.
+
+## Batch 7 native runtimes and Portage
+
+After the native compiler and utility floor, stage 70 builds zlib, bzip2,
+libffi, Perl 5.42.2, OpenSSL 3.5.9 and CPython 3.12.15 inside the native root.
+The source archives are SHA512 locked; libffi's pin matches its entry in the
+pinned Gentoo Manifest. Per-source receipts include the recipe and installed
+output digest, so a completed runtime can be verified after interruption.
+Python's acceptance probe imports `_ctypes`, `bz2`, `lzma`, `ssl` and `zlib`,
+which checks the actual libffi/OpenSSL/compression runtime rather than only the
+interpreter version. Perl checks `Config`, `ExtUtils::MakeMaker`, `Digest::SHA`
+and `IPC::Cmd`.
+
+Stage 71 copies and hashes the pinned Gentoo repository and Portage source into
+the native root, installs the no-multilib seed profile and source-only Portage
+policy, then checks `emerge --version`, locale handling and Portage's bzip2
+lookup. It applies the three independent Portage concurrency settings. No
+package operation runs in this batch; scanelf is added before a later ebuild
+phase requires it. VM and T440p builds use the same x86_64 runtime stages.
+Resume with the same input bundle and workspace after interruption. A fresh
+guest replay is still required to validate the native runtime build end to end.

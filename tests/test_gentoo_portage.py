@@ -188,14 +188,32 @@ portage_emerge --pretend @world
         stages = [line.split('/stages/', 1)[1].split('"', 1)[0]
                   for line in driver.splitlines() if '/stages/' in line and '. ' in line]
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual(stages[-6:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh'])
+        self.assertEqual(stages[-9:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh', '63-native-tool-floor.sh', '70-native-runtimes.sh', '71-native-portage.sh'])
         prepare = (GENTOO / 'prepare.py').read_text()
         for name in ('lib/portage.sh', 'lib/manifests.sh', 'lib/portage-host.sh', 'lib/python.sh', 'probes/portage-integrity.py', 'sources/gentoo-repository.lock',
                      'sources/python.lock', 'sources/bzip2.lock', 'sources/portage.lock',
                      'stages/50-gentoo-sources.sh', 'stages/51-host-python.sh', 'stages/52-portage-host.sh',
                      'lib/native.sh', 'stages/60-native-root.sh', 'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh',
-                     'sources/native-bash.lock', 'sources/native-coreutils.lock'):
+                     'sources/native-bash.lock', 'sources/native-coreutils.lock',
+                     'lib/native-tools.sh', 'stages/63-native-tool-floor.sh',
+                     'stages/native-runtime-build.sh', 'stages/70-native-runtimes.sh',
+                     'stages/71-native-portage.sh', 'sources/zlib.lock', 'sources/openssl.lock',
+                     'sources/libffi.lock', 'sources/perl.lock'):
             self.assertIn(repr(name), prepare)
+
+    def test_batch_seven_native_runtime_and_portage_acceptance_inputs(self):
+        runtime = (GENTOO / 'stages/native-runtime-build.sh').read_text()
+        self.assertLess(runtime.index('zlib_hash='), runtime.index('bzip_hash='))
+        self.assertLess(runtime.index('ffi_hash='), runtime.index('python_hash='))
+        self.assertLess(runtime.index('perl_hash='), runtime.index('openssl_hash='))
+        for module in ('_ctypes', 'bz2', 'lzma', 'ssl', 'zlib', 'ExtUtils::MakeMaker', 'Digest::SHA', 'IPC::Cmd'):
+            self.assertIn(module, runtime)
+        self.assertIn('--with-system-ffi', runtime)
+        portage = (GENTOO / 'stages/71-native-portage.sh').read_text()
+        for setting in ('GENTOO_PORTAGE_JOBS', 'GENTOO_PORTAGE_LOAD_AVERAGE', 'GENTOO_PORTAGE_MAKE_JOBS'):
+            self.assertIn(setting, portage)
+        self.assertIn('Portage 3.0.82.2', portage)
+        self.assertIn('find_binary("bzip2")', portage)
 
 
 if __name__ == '__main__':

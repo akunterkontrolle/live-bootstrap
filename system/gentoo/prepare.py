@@ -49,6 +49,9 @@ BUNDLE_FILES = (
     'sources/native-sed-4.10.lock', 'sources/native-tar-1.35.lock',
     'sources/native-xz-5.8.3.lock',
     'sources/native-file-5.48.lock',
+    'stages/native-runtime-build.sh', 'stages/70-native-runtimes.sh',
+    'stages/71-native-portage.sh', 'sources/zlib.lock', 'sources/openssl.lock',
+    'sources/libffi.lock', 'sources/perl.lock',
 )
 
 

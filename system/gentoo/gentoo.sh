@@ -89,5 +89,7 @@ if [ "$GENTOO_MODERN_KERNEL_READY" = 1 ]; then
     . "$SCRIPT_DIR/stages/62-native-compiler.sh"
     . "$SCRIPT_DIR/lib/native-tools.sh"
     . "$SCRIPT_DIR/stages/63-native-tool-floor.sh"
+    . "$SCRIPT_DIR/stages/70-native-runtimes.sh"
+    . "$SCRIPT_DIR/stages/71-native-portage.sh"
 fi
 printf 'Resume: bash %s/gentoo.sh build\n' "$SCRIPT_DIR"

@@ -103,3 +103,24 @@ diffutils, File, findutils, gawk, grep, gzip, make, patch, sed, tar, and xz sour
 Their SHA512 values come from the reviewed experimental source locks. GNU
 make's lzip-compressed release is handled by a separately pinned host lzip
 build; no system package manager is used to unpack or build these tools.
+
+# Batch 7 native runtime and package-manager sources
+
+Batch 7 builds the C libraries and runtimes used by the native seed, then adds
+the already-pinned Portage and Gentoo sources from batch 5 to the native root.
+
+| Source | Version | Use | Provenance of pin |
+| --- | --- | --- | --- |
+| zlib | 1.3.2 | Native Python/OpenSSL compression support | Reviewed reference seed lock SHA512 |
+| bzip2 | 1.0.8 | Native Python `bz2` and Portage archive handling | Pinned Gentoo Manifest SHA512 |
+| libffi | 3.4.8 | CPython `_ctypes` support | Pinned Gentoo `dev-libs/libffi` Manifest SHA512 |
+| Perl | 5.42.2 | OpenSSL Configure and ebuild bootstrap runtime | Reviewed reference runtime lock SHA512 |
+| OpenSSL | 3.5.9 | Native Python TLS support | Reviewed reference seed lock SHA512 |
+| CPython | 3.12.15 | Native Portage interpreter | Pinned Gentoo `dev-lang/python` Manifest SHA512 |
+| Portage | 3.0.82.2 | Native source-only package manager | Batch 5 source lock |
+| Gentoo repository | `5548522e2c2fa10a4c009348e9ba84c44783f47d` | Native ebuild/profile tree | Batch 5 repository lock |
+
+The native builds are performed in the new x86_64 root after the modern-kernel
+handoff; host Python and host libraries are not copied into it. Stage receipts
+record each source digest, recipe digest and installed output digest. No
+Portage package operation is part of this batch.
