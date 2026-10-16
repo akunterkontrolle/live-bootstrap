@@ -1,0 +1,2 @@
+# GNU Wget is source-built inside the native root for verified Portage HTTPS fetches.
+wget-1.25.0.tar.lz|https://ftp.gnu.org/gnu/wget/wget-1.25.0.tar.lz|sha512=79403f594636e5d703817ceec59e5155940cd4734746ef793ef3bdabd100d0014a44c5e24f705656cf1e0762d87003fa1dc3e1b5605fae392bc9d7f121d90bae

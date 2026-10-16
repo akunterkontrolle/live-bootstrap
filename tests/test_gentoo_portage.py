@@ -188,7 +188,7 @@ portage_emerge --pretend @world
         stages = [line.split('/stages/', 1)[1].split('"', 1)[0]
                   for line in driver.splitlines() if '/stages/' in line and '. ' in line]
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual(stages[-9:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh', '63-native-tool-floor.sh', '70-native-runtimes.sh', '71-native-portage.sh'])
+        self.assertEqual(stages[-10:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh', '63-native-tool-floor.sh', '70-native-runtimes.sh', '71-native-portage.sh', '80-native-gentoo-system.sh'])
         prepare = (GENTOO / 'prepare.py').read_text()
         for name in ('lib/portage.sh', 'lib/manifests.sh', 'lib/portage-host.sh', 'lib/python.sh', 'probes/portage-integrity.py', 'sources/gentoo-repository.lock',
                      'sources/python.lock', 'sources/bzip2.lock', 'sources/portage.lock',
@@ -198,7 +198,14 @@ portage_emerge --pretend @world
                      'lib/native-tools.sh', 'stages/63-native-tool-floor.sh',
                      'stages/native-runtime-build.sh', 'stages/70-native-runtimes.sh',
                      'stages/71-native-portage.sh', 'sources/zlib.lock', 'sources/openssl.lock',
-                     'sources/libffi.lock', 'sources/perl.lock'):
+                     'sources/libffi.lock', 'sources/perl.lock', 'stages/80-native-gentoo-system.sh',
+                     'lib/native-gentoo-system.sh', 'stages/system/10-prepare.sh',
+                     'stages/system/20-runtime-and-downloader.sh', 'stages/system/30-bootstrap-prerequisites.sh',
+                     'stages/system/40-runtime-providers.sh', 'stages/system/50-elf-and-compiler.sh',
+                     'stages/system/60-gentoo-bootstrap.sh', 'stages/system/70-system.sh',
+                     'stages/system/80-verify.sh', 'build-bootstrap-scanelf.sh',
+                     'audit-resolved-sources.py', 'sources/native-xz-5.8.3.lock',
+                     'sources/native-tar-1.35.lock', 'sources/native-gawk-5.4.1.lock', 'sources/wget.lock'):
             self.assertIn(repr(name), prepare)
 
     def test_batch_seven_native_runtime_and_portage_acceptance_inputs(self):

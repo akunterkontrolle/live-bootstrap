@@ -50,7 +50,16 @@ BUNDLE_FILES = (
     'sources/native-xz-5.8.3.lock',
     'sources/native-file-5.48.lock',
     'stages/native-runtime-build.sh', 'stages/70-native-runtimes.sh',
-    'stages/71-native-portage.sh', 'sources/zlib.lock', 'sources/openssl.lock',
+    'stages/71-native-portage.sh', 'stages/80-native-gentoo-system.sh',
+    'lib/native-gentoo-system.sh',
+    'stages/system/10-prepare.sh', 'stages/system/20-runtime-and-downloader.sh',
+    'stages/system/30-bootstrap-prerequisites.sh', 'stages/system/40-runtime-providers.sh',
+    'stages/system/50-elf-and-compiler.sh', 'stages/system/60-gentoo-bootstrap.sh',
+    'stages/system/70-system.sh', 'stages/system/80-verify.sh',
+    'build-bootstrap-scanelf.sh', 'audit-resolved-sources.py',
+    'sources/native-xz-5.8.3.lock', 'sources/native-tar-1.35.lock',
+    'sources/native-gawk-5.4.1.lock', 'sources/wget.lock',
+    'sources/zlib.lock', 'sources/openssl.lock',
     'sources/libffi.lock', 'sources/perl.lock',
 )
 

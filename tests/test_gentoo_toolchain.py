@@ -157,7 +157,7 @@ done
         driver = (GENTOO / 'gentoo.sh').read_text()
         stages = re.findall(r'\. "\$SCRIPT_DIR/(stages/[^"]+)"', driver)
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual(stages[-6:], ['stages/60-native-root.sh', 'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh', 'stages/63-native-tool-floor.sh', 'stages/70-native-runtimes.sh', 'stages/71-native-portage.sh'])
+        self.assertEqual(stages[-7:], ['stages/60-native-root.sh', 'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh', 'stages/63-native-tool-floor.sh', 'stages/70-native-runtimes.sh', 'stages/71-native-portage.sh', 'stages/80-native-gentoo-system.sh'])
         self.assertTrue(set(stages) <= set(prepare.BUNDLE_FILES))
         seen = set()
         for stage in stages:

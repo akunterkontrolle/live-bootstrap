@@ -642,8 +642,48 @@ and `IPC::Cmd`.
 Stage 71 copies and hashes the pinned Gentoo repository and Portage source into
 the native root, installs the no-multilib seed profile and source-only Portage
 policy, then checks `emerge --version`, locale handling and Portage's bzip2
-lookup. It applies the three independent Portage concurrency settings. No
+lookup. It applies the three independent Portage concurrency settings. Until
+the following stage starts, distfiles and temporary build data stay on the
+workspace. No
 package operation runs in this batch; scanelf is added before a later ebuild
 phase requires it. VM and T440p builds use the same x86_64 runtime stages.
 Resume with the same input bundle and workspace after interruption. A fresh
 guest replay is still required to validate the native runtime build end to end.
+
+## Batch 8 Gentoo bootstrap and multilib `@system`
+
+After stage 71, the continuation runs eight ordered system phases in the same
+durable workspace: prepare the split-usr multilib profile and strict source
+policy; build a TLS-capable Wget; seed audited dependency-cycle providers;
+register the source-built glibc and Perl runtimes temporarily; build
+`scanelf` and expose verified 32-bit startup objects; run Gentoo's pinned
+bootstrap; merge and converge multilib `@system`; then verify both ABIs,
+OpenRC, runtime imports and the remaining `@system` graph. The three Portage
+settings remain independent: `portage.jobs`, `portage.load_average` and
+`portage.make_jobs`. Wget and the temporary MPFR-enabled Gawk use
+`build.source_jobs`.
+
+The temporary `package.provided` entries and bootstrap USE/cycle overrides
+are recorded and retired only after Gentoo installs their real providers.
+Portage remains source-only, uses the pinned repository's Manifests without
+changing them, disables ebuild test phases, and checks the repository before
+and after each emerge operation. Source-built `scanelf` is installed before
+the bootstrap compiler operation that needs it. Interrupted phases retain
+their logs, inputs and source/build trees on the workspace; rerun the same
+`bash gentoo.sh build` command in the same guest. Fingerprints exclude
+concurrency settings, so changing Portage concurrency does not invalidate a
+completed source recipe.
+
+The VM continuation mounts only the scratch UUID passed by the VM launcher,
+after verifying it is a distinct existing ext4 filesystem. It requires the
+launcher-recorded host free-space values plus at least 50 GiB free in the
+workspace and 24 GiB on scratch. Hardware has no synthetic scratch device;
+it uses `/build/gentoo-scratch` on the already identified workspace and
+requires 70 GiB free. Neither path formats a device. The native root binds
+scratch at `/gentoo-scratch` for Portage temporary builds and distfiles.
+
+This batch's checks cover ordered dependencies, unique source-lock entries,
+the complete generated input bundle, SHA256 manifest verification, Bash
+syntax and the existing Gentoo regression fixtures. They do not execute the
+Gentoo bootstrap or a full `@system` merge in a fresh VM; those remain part of
+the final replay acceptance.
