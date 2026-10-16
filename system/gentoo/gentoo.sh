@@ -71,4 +71,12 @@ cd "$SCRIPT_DIR"
 . "$SCRIPT_DIR/stages/30-kernel.sh"
 . "$SCRIPT_DIR/stages/31-kernel-modules.sh"
 . "$SCRIPT_DIR/stages/32-handoff.sh"
+if [ "$GENTOO_MODERN_KERNEL_READY" = 1 ]; then
+    . "$SCRIPT_DIR/lib/cxx.sh"
+    . "$SCRIPT_DIR/lib/runtime.sh"
+    . "$SCRIPT_DIR/stages/40-gcc-cxx.sh"
+    . "$SCRIPT_DIR/stages/41-cxx-libgcc.sh"
+    . "$SCRIPT_DIR/stages/42-libstdcxx.sh"
+    . "$SCRIPT_DIR/stages/43-runtime-acceptance.sh"
+fi
 printf 'Resume: bash %s/gentoo.sh build\n' "$SCRIPT_DIR"

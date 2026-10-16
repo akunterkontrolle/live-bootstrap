@@ -407,6 +407,18 @@ kernel_running_build_id() {{ printf '%s\\n' {'a' * 40}; }}
                 self.assertIn('Modern-kernel cold boot verified', result.stdout)
                 if not attempt:
                     (build / 'state' / ('32-handoff-' + identity + '.done')).unlink()
+            # A caller-supplied flag cannot bypass the actual old-kernel gate.
+            old_kernel = script.replace('echo 6.12.111', 'echo 2.6.32').replace(
+                '. stages/32-handoff.sh',
+                'GENTOO_MODERN_KERNEL_READY=1\n. stages/32-handoff.sh\n[ "$GENTOO_MODERN_KERNEL_READY" = 0 ]')
+            result = subprocess.run(['bash', '-c', old_kernel], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('SHUTDOWN MILESTONE', result.stdout)
+            wrong_build = script.replace("printf '%s\\n' " + 'a' * 40, "printf '%s\\n' " + 'b' * 40)
+            self.assertNotEqual(wrong_build, script)
+            result = subprocess.run(['bash', '-c', wrong_build], text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('running kernel build ID differs', result.stderr)
             metadata = json.loads((build / 'handoff' / identity / 'handoff.json').read_text())
             self.assertEqual(metadata['boot_id'], boot_id)
             self.assertEqual((build / 'current-handoff').read_text().strip(), identity)

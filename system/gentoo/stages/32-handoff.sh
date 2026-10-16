@@ -59,11 +59,13 @@ printf '%s\n' "$input_digest" > "$temporary"
 sync
 mv "$temporary" "$WORK_ROOT/current-handoff"
 sync
+GENTOO_MODERN_KERNEL_READY=0
 if [ "$(uname -r)" = "$KERNEL_RELEASE" ] && [ "$(uname -m)" = x86_64 ] &&
     [ "$(cat /proc/sys/kernel/random/boot_id)" != "$(cat "$KERNEL_ARTIFACTS/build-boot-id")" ]; then
     [ "$(kernel_running_build_id)" = "$(cat "$KERNEL_ARTIFACTS/build-id")" ] ||
         gentoo_die 'running kernel build ID differs from the saved kernel; boot the verified handoff image'
-    printf 'Modern-kernel cold boot verified. Batch 3 stops before C++ runtime completion.\n'
+    GENTOO_MODERN_KERNEL_READY=1
+    printf 'Modern-kernel cold boot verified.\n'
 else
     printf '\nSHUTDOWN MILESTONE: kernel, modules and all continuation inputs are durable.\n'
     printf 'From the guest console: cd /; bash %s/shutdown.sh\n' "$handoff"

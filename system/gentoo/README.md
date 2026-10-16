@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–3
+# Gentoo continuation — batches 1–4
 
 ## Prerequisites and ownership
 
@@ -53,7 +53,7 @@ bundle into an already booted build environment remains manual during review.
 
    ```sh
    python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode vm --output /tmp/gentoo-inputs-v3
+     --mode vm --output /tmp/gentoo-inputs-v4
    ```
 
 2. **Host, previous VM stopped:** put the original rootfs.py QEMU argument array
@@ -68,10 +68,10 @@ bundle into an already booted build environment remains manual during review.
    ```
 
 3. **Guest:** after the original bootstrap completes, transfer the complete
-   `/tmp/gentoo-inputs-v3` directory into the guest, preserving all files. Run:
+   `/tmp/gentoo-inputs-v4` directory into the guest, preserving all files. Run:
 
    ```sh
-   bash /tmp/gentoo-inputs-v3/gentoo.sh build
+   bash /tmp/gentoo-inputs-v4/gentoo.sh build
    ```
 
    The driver builds/resumes batches 1–3 and prints **SHUTDOWN MILESTONE** after
@@ -109,7 +109,8 @@ bundle into an already booted build environment remains manual during review.
    Substitute your configured label. The resume script mounts devpts/tmpfs as
    needed and runs the exact saved input snapshot. The driver rechecks outputs
    and verifies Linux 6.12.111, x86_64, a boot ID different from the kernel's build boot, and the GNU build ID
-   from `/sys/kernel/notes` matching the saved vmlinux build ID. Batch 3 stops here; runtime execution/C++ completion is batch 4.
+   from `/sys/kernel/notes` matching the saved vmlinux build ID. It then completes
+   the multilib C/C++ toolchain and executes both ABIs (batch 4).
    After an interruption, repeat steps 5–6; completed builds keep their receipts.
 
 ## T440p command sequence
@@ -120,14 +121,14 @@ bundle into an already booted build environment remains manual during review.
 
    ```sh
    python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode hardware --output /tmp/gentoo-hardware-inputs-v3
+     --mode hardware --output /tmp/gentoo-hardware-inputs-v4
    ```
 
 2. **T440p bootstrap environment:** with `/proc`, `/sys`, device links and the
    existing workspace available, run:
 
    ```sh
-   bash /tmp/gentoo-hardware-inputs-v3/gentoo.sh build
+   bash /tmp/gentoo-hardware-inputs-v4/gentoo.sh build
    ```
 
    The driver checks the workspace disk's by-id, serial, capacity and optional
@@ -459,3 +460,71 @@ source/signature and retained release key were checked with GPG. A new full
 kernel/module build, actual guest shutdown/cold boot and T440p devices are not
 accepted by those fixture tests. Complete fresh VM replay remains required
 after final integration; hardware acceptance remains separate.
+
+
+## Batch 4 multilib C/C++ completion
+
+For a workspace already completed with batch 3, prepare and transfer the new
+v4 bundle using the same mode/configuration, then invoke that new bundle's
+`gentoo.sh build` once in the verified modern-kernel guest. The old saved resume
+script intentionally runs its old snapshot. The new entry reuses the existing
+compiler and kernel receipts, selects a new durable handoff, and continues
+without another reboot if the running kernel passes the existing cold-boot
+and build-ID checks. Subsequent resumptions use the newly selected handoff in
+step 6. If still on the original kernel, this bundle stops at the shutdown
+milestone; it cannot enter stage 40 until that handoff succeeds. VM and T440p
+use the same compiler stages; neither path signs or modifies firmware here.
+
+The existing pinned GCC 16.2.0 source is verified again; no new archive/version
+or binary toolchain is introduced. The C++ build uses a separate
+`build/gcc-linux-cxx` object tree and the existing GNU sysroot. Its host compilers
+remain the original source-built `/usr/bin/gcc` and `/usr/bin/g++`. The modern
+kernel must support IA32 execution (the batch-3 fragment enables it). Source
+parallelism still comes only from `build.source_jobs`; Portage does not exist
+at this milestone.
+
+The visible order is:
+
+1. `40-gcc-cxx`: configure C/C++ with POSIX threads and m32/m64, generate and
+   bind GCC's target nm wrapper, build the front ends, and compile actual
+   template-bearing ELF32/ELF64 objects with `xg++`/`cc1plus`.
+2. `41-cxx-libgcc`: generate ABI-aware target compiler wrappers, bind recursive
+   libgcc Makefiles, remove only the two known generated ELF64 startup symlinks,
+   check each ABI's real glibc startup objects, and build/install libgcc plus
+   the C/C++ drivers. Shared runtime and private libgcc search directories are
+   passed explicitly to intermediate compilers; `--sysroot` alone is insufficient.
+3. `42-libstdcxx`: configure the target C++ runtime after shared libgcc exists,
+   correct only the generated libtool CXX tags with their ABI's complete startup
+   paths and wrapper, build/install libstdc++, and inspect both ABIs' shared and
+   static libstdc++ and libsupc++ archives. Upstream source trees stay unchanged.
+4. `43-runtime-acceptance`: compile/link/execute C and C++ for both ABIs through
+   both installed and intermediate drivers (eight executable probes). C exercises
+   libc and integer division; C++ exercises threads, allocation, strings, vectors,
+   iostreams and exception unwinding. Each executable's ELF class, interpreter
+   and needed libraries are checked. Execution must exit zero with exact output.
+
+Execution invokes the source-built loader under `sysroot-x86_64/lib32` or
+`lib64`, with a clean environment, disabled loader cache and explicit library
+paths. Every resolved disk DSO must belong to this run's sysroot or toolchain
+and match the executable ABI. No GNU loader/library is copied into the bootstrap
+root's `/lib`. Probe programs and objects remain in `build/probes/cxx`; the
+append-only invocation log records loader resolutions and actual execution
+results. The `43-runtime-acceptance.done` receipt is published only after all
+checks pass and reruns all eight probes on every resume.
+
+Each of the four stages binds its recipe/helpers and prerequisite receipt;
+stage 40 also binds the GCC source lock and completed sysroot links. Interrupted
+builds retain their object trees and input bindings. Changed unfinished recipes
+are refused; do not remove receipts to force reuse. Changing source-job counts,
+documentation or later-stage scripts does not invalidate these builds. Earlier
+compiler/kernel recipes and locks remain unchanged. The batch-3 handoff recipe
+now exposes its verified boot gate to the driver; its content-addressed receipt
+naturally belongs to the newly selected bundle.
+
+Focused tests cover generated nm/libgcc/libtool rules, idempotent ABI token
+replacement, unexpected startup-object refusal, last-ABI-option wrapper behavior,
+the pre-build boot gate, and loader isolation and execution failures. Disposable
+native C/C++ programs exercise the real loader and C++ runtime, including threads
+and unwinding. These fixtures use the host runtime and do not establish a full
+GCC 16.2.0/glibc 2.44 guest build or accept the kernel handoff. A fresh complete
+VM build/reboot through this milestone remains required in the final replay.

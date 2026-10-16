@@ -28,6 +28,9 @@ BUNDLE_FILES = (
     'stages/30-kernel.sh', 'stages/31-kernel-modules.sh',
     'stages/32-handoff.sh', 'post-reboot.sh', 'shutdown.sh',
     'sources/linux-signature.lock', 'keys/kernel-release.gpg',
+    'lib/cxx.sh', 'lib/runtime.sh', 'probes/runtime.c', 'probes/runtime.cc',
+    'stages/40-gcc-cxx.sh', 'stages/41-cxx-libgcc.sh',
+    'stages/42-libstdcxx.sh', 'stages/43-runtime-acceptance.sh',
 )
 
 
