@@ -1,0 +1,2 @@
+# Portage source paired with the immutable Gentoo repository snapshot.
+portage-3.0.82.2.tar.bz2|https://gitweb.gentoo.org/proj/portage.git/snapshot/portage-3.0.82.2.tar.bz2|sha512=6c7384bfe5bbadf6672d2f24cb8b54d1d19d956620125fc6c60692c9fb60fb3402e4c1bf6a1b2c407c7a3a085690bebad893eca8d0687ed8efb3284d4fcd86ca

@@ -78,5 +78,10 @@ if [ "$GENTOO_MODERN_KERNEL_READY" = 1 ]; then
     . "$SCRIPT_DIR/stages/41-cxx-libgcc.sh"
     . "$SCRIPT_DIR/stages/42-libstdcxx.sh"
     . "$SCRIPT_DIR/stages/43-runtime-acceptance.sh"
+    . "$SCRIPT_DIR/lib/portage.sh"
+    . "$SCRIPT_DIR/stages/50-gentoo-sources.sh"
+    . "$SCRIPT_DIR/lib/python.sh"
+    . "$SCRIPT_DIR/stages/51-host-python.sh"
+    . "$SCRIPT_DIR/stages/52-portage-host.sh"
 fi
 printf 'Resume: bash %s/gentoo.sh build\n' "$SCRIPT_DIR"

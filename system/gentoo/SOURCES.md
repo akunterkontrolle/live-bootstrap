@@ -1,12 +1,13 @@
 # Batch 2 source inputs
 
-Every `sources/*.lock` contains one archive name, HTTPS URL and original SHA512
-pin. These records are copied unchanged from the reviewed experimental
-`linux24-gentoo/system/sources.lock`; digests are not generated from compiler
-outputs or replaced with hashes of an arbitrary new download. The runtime
-verifies archives before extraction and on every resumption, even when a
-completed build receipt exists. There are no stage archives, binary packages,
-GCC `download_prerequisites`, moving revisions or revision override switches.
+Each source archive has its own lock with one archive name, HTTPS URL and
+original SHA512 pin. Batch 2 records were copied from the reviewed experimental
+`linux24-gentoo/system/sources.lock`; later records follow their batch-specific
+source review below. Digests are not generated from compiler outputs or replaced
+with hashes of an arbitrary new download. The runtime verifies archives before
+extraction and on every resumption, even when a completed build receipt exists.
+There are no stage archives, binary packages, GCC `download_prerequisites`,
+moving revisions or revision override switches.
 
 | Source | Version | Use | Provenance of pin |
 | --- | --- | --- | --- |
@@ -59,3 +60,29 @@ then exported with `export-minimal` to retain its self-signed identities and
 remove unrelated third-party certifications. The checked-in public key successfully verified the pinned
 Linux 6.12.111 archive/signature during batch 3 checks. This establishes source
 signature verification, not signed VM boot or hardware acceptance.
+
+
+# Batch 5 Gentoo and Portage source inputs
+
+Batch 5 adds four independent SHA512 locks. The GitHub archive contains
+Gentoo repository commit `5548522e2c2fa10a4c009348e9ba84c44783f47d`; it is
+extracted as the immutable package repository for the seed. Python, bzip2 and
+Portage sources are checked against the versions selected for that repository.
+Their archive digests were matched to the experimental source locks and the
+readable local source cache. The extracted repository's 18,202 Manifest records
+and complete file/directory/symlink tree are fingerprinted in the workspace.
+
+| Source | Version | Use | Provenance of pin |
+| --- | --- | --- | --- |
+| Gentoo repository | commit `5548522e2c2fa10a4c009348e9ba84c44783f47d` | Fixed ebuilds, metadata and amd64 desktop profile | Reference seed lock; GitHub commit archive SHA512 |
+| CPython | 3.12.15 | Source-built bootstrap-host Portage runtime | Pinned Gentoo `dev-lang/python` Manifest SHA512 |
+| bzip2 | 1.0.8 | Source-built static library for Python's `bz2` module | Pinned Gentoo `app-arch/bzip2` Manifest SHA512 |
+| Portage | 3.0.82.2 | Source-only package manager | Reference seed lock and matching pinned repository ebuild |
+
+OpenSSL and zlib are development inputs supplied by the original bootstrap,
+not fetched as batch-5 archives. Their headers and linker-resolved libraries
+are hashed into `state/host-python.inputs`, along with the host triple and
+completed host-toolchain inputs. A changed dependency fails the host-Python
+stage fingerprint. Portage source integrity also has a disposable digestcheck
+probe: valid bytes pass while corrupt bytes and missing or checksum-free entries
+fail, without modifying the Manifest fixture.

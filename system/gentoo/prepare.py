@@ -31,6 +31,12 @@ BUNDLE_FILES = (
     'lib/cxx.sh', 'lib/runtime.sh', 'probes/runtime.c', 'probes/runtime.cc',
     'stages/40-gcc-cxx.sh', 'stages/41-cxx-libgcc.sh',
     'stages/42-libstdcxx.sh', 'stages/43-runtime-acceptance.sh',
+    'lib/portage.sh', 'lib/manifests.sh', 'lib/portage-host.sh', 'lib/python.sh',
+    'probes/portage-integrity.py',
+    'sources/gentoo-repository.lock', 'sources/python.lock',
+    'sources/bzip2.lock', 'sources/portage.lock',
+    'stages/50-gentoo-sources.sh', 'stages/51-host-python.sh',
+    'stages/52-portage-host.sh',
 )
 
 

@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–4
+# Gentoo continuation — batches 1–5
 
 ## Prerequisites and ownership
 
@@ -16,7 +16,8 @@ They need Bash, GNU coreutils/findutils, awk, sed and util-linux, including
 `flock`, `mountpoint`, `blkid` and `mount`. Hardware identification also needs
 `lsblk`, `blockdev`, `/sys` and persistent `/dev/disk/by-id` links. Source builds
 use the original source-built GCC/G++, GMP/MPFR/MPC/zlib static libraries,
-make, tar/decompressors, wget, Bison, Flex, Perl, Python and autotools. No guest
+OpenSSL and zlib development headers/libraries for Python's `ssl` and `zlib`
+modules, make, tar/decompressors, wget, Bison, Flex, Perl, Python and autotools. No guest
 TOML parser is used. The preflight compiles/runs host prerequisite probes and
 binds the host compiler, component, header and archive checksums to this run.
 
@@ -53,7 +54,7 @@ bundle into an already booted build environment remains manual during review.
 
    ```sh
    python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode vm --output /tmp/gentoo-inputs-v4
+     --mode vm --output /tmp/gentoo-inputs-v5
    ```
 
 2. **Host, previous VM stopped:** put the original rootfs.py QEMU argument array
@@ -68,13 +69,13 @@ bundle into an already booted build environment remains manual during review.
    ```
 
 3. **Guest:** after the original bootstrap completes, transfer the complete
-   `/tmp/gentoo-inputs-v4` directory into the guest, preserving all files. Run:
+   `/tmp/gentoo-inputs-v5` directory into the guest, preserving all files. Run:
 
    ```sh
-   bash /tmp/gentoo-inputs-v4/gentoo.sh build
+   bash /tmp/gentoo-inputs-v5/gentoo.sh build
    ```
 
-   The driver builds/resumes batches 1–3 and prints **SHUTDOWN MILESTONE** after
+   The driver builds/resumes batches 1–5 and prints **SHUTDOWN MILESTONE** after
    verifying the kernel, matching modules, inputs and saved post-reboot scripts.
 
 4. **Guest console, explicit shutdown:** substitute the exact handoff path
@@ -110,8 +111,10 @@ bundle into an already booted build environment remains manual during review.
    needed and runs the exact saved input snapshot. The driver rechecks outputs
    and verifies Linux 6.12.111, x86_64, a boot ID different from the kernel's build boot, and the GNU build ID
    from `/sys/kernel/notes` matching the saved vmlinux build ID. It then completes
-   the multilib C/C++ toolchain and executes both ABIs (batch 4).
-   After an interruption, repeat steps 5–6; completed builds keep their receipts.
+   the multilib C/C++ toolchain and executes both ABIs (batch 4), then builds
+   the pinned repository, host Python and Portage configuration (batch 5).
+   No package emerge runs yet. After an interruption, repeat steps 5–6; completed
+   builds keep their receipts.
 
 ## T440p command sequence
 
@@ -121,14 +124,14 @@ bundle into an already booted build environment remains manual during review.
 
    ```sh
    python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode hardware --output /tmp/gentoo-hardware-inputs-v4
+     --mode hardware --output /tmp/gentoo-hardware-inputs-v5
    ```
 
 2. **T440p bootstrap environment:** with `/proc`, `/sys`, device links and the
    existing workspace available, run:
 
    ```sh
-   bash /tmp/gentoo-hardware-inputs-v4/gentoo.sh build
+   bash /tmp/gentoo-hardware-inputs-v5/gentoo.sh build
    ```
 
    The driver checks the workspace disk's by-id, serial, capacity and optional
@@ -528,3 +531,71 @@ native C/C++ programs exercise the real loader and C++ runtime, including thread
 and unwinding. These fixtures use the host runtime and do not establish a full
 GCC 16.2.0/glibc 2.44 guest build or accept the kernel handoff. A fresh complete
 VM build/reboot through this milestone remains required in the final replay.
+
+
+## Batch 5 Gentoo source snapshot and Portage host
+
+After batch 4 passes all eight runtime probes, transfer a fresh v5 bundle with
+the same mode and configuration and invoke `gentoo.sh build` in the verified
+modern-kernel guest. Earlier compiler receipts remain reusable; the new input
+snapshot takes a new handoff identity and proceeds without another restart.
+An invocation before the modern-kernel check stops at the saved shutdown
+milestone and cannot fetch or build batch-5 sources.
+
+Stage 50 fetches or verifies the SHA-512-pinned Gentoo repository archive at
+commit `5548522e2c2fa10a4c009348e9ba84c44783f47d`. It verifies the repository
+identity, the pinned Portage ebuild's Python compatibility and the selected
+amd64 desktop profile. It stores a sorted checksum record for every `Manifest`
+under `state/gentoo-manifests-COMMIT.sha256`; a second receipt covers the full
+extracted tree, including file modes and symlink targets. Repository input
+lives under `sources/`; downloaded archives live in `distfiles/`. Stage 52 checks
+the full tree before and after the Portage self-check. The emerge helper checks
+all Manifests before and after each later package operation. A changed, missing
+or added Manifest stops the driver and leaves a `.changed` diagnostic beside
+the baseline.
+
+Stage 51 first fingerprints the bootstrap OpenSSL/zlib development headers and
+libraries needed by CPython's native modules. It then builds bzip2 1.0.8 and
+CPython 3.12.15 from pinned sources into `host-tools/`, using the original
+bootstrap's native GCC. It runs `make` and
+`make install`, not Python's test suite. The acceptance check verifies the
+version and imports `bz2`, `ssl`, `zlib`, `hashlib`, `json` and `urllib`; bzip2
+compression must round-trip. Python's configure-time compiler wrapper corrects
+only the host's musl multiarch query. Build parallelism uses
+`build.source_jobs`, independently of all Portage concurrency values. The
+Python and bzip2 sources and their build tree remain available for resumption.
+
+Stage 52 verifies Portage 3.0.82.2 from its own pinned archive and checks its
+ebuild against the repository snapshot. The reviewed desktop profile and
+`repos.conf` point at that snapshot. `make.conf` sets `FEATURES` to disable
+package tests and binary packages, disable Manifest generation, and require
+strict digest checking. It leaves Portage's `--jobs`, `--load-average`, and
+`MAKEOPTS=-j` connected to the three independent TOML settings. Distfiles and
+temporary build data stay on the workspace. Generated configuration is
+refreshed on each invocation, so concurrency can change without invalidating
+completed source builds.
+
+This first host configuration creates a `portage` group and non-login account
+with GID/UID 250 in the temporary bootstrap guest if those IDs are free. An
+existing conflicting account or ID causes a stop. No account is created in the
+future installed root. The `emerge` helper checks repository Manifests before
+and after every future Portage operation, forces source-only package selection,
+and rejects binary-package or concurrency overrides. It also provides an
+executable probe against Portage's strict `digestcheck`: a valid SHA-512 source passes, corrupted
+bytes, missing source files and size-only entries fail, and the Manifest stays
+unchanged. This probe exercises source integrity handling; it does not run an
+ebuild test phase.
+
+The stage receipts bind each source lock, builder, audit code and required
+prior-stage receipt. Completed compiler fingerprints do not include these new
+locks or helper files. If a source build is interrupted, resume with the same
+bundle and workspace. Changed unfinished recipes are refused. Batch 5 verifies
+the Portage command and source audit but does not run emerge or install packages;
+source-built `scanelf` and the native root are introduced in batch 6.
+
+Focused checks validate the source locks against the available pinned archives,
+Manifest snapshot mutation detection, the generated concurrency policy, bundle
+completeness, dependency order, Python/shell syntax and prior Gentoo regression
+fixtures. They do not build Python inside the bootstrap guest or establish a
+fresh end-to-end Portage guest run. The full VM replay remains part of final
+acceptance.

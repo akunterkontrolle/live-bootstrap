@@ -1,0 +1,2 @@
+# Source-built host interpreter used by the pinned Portage release.
+Python-3.12.15.tar.xz|https://www.python.org/ftp/python/3.12.15/Python-3.12.15.tar.xz|sha512=def68bdc3e3aba4d285ae8b305c90f2319297b5a7b1888f582b3cef979bf7f43db0d3047b23312935904576982336f9f78506183b109f388905bf4db33e6abea
