@@ -15,8 +15,11 @@ you can run bootstap inside chroot.
 # SPDX-FileCopyrightText: 2023-24 Gábor Stefanik <netrolller.3d@gmail.com>
 
 import argparse
+import json
 import os
 import signal
+import sys
+import tempfile
 import threading
 
 from lib.generator import Generator, stage0_arch_map
@@ -43,6 +46,9 @@ def create_configuration_file(args):
         config.write(f"INTERACTIVE={args.interactive}\n")
         config.write(f"QEMU={args.qemu}\n")
         config.write(f"BARE_METAL={args.bare_metal or (args.qemu and args.interactive)}\n")
+        if "gentoo" in args.extra_builds:
+            config.write("GENTOO_BOOTSTRAP=True\n")
+            config.write(f"GENTOO_MODE={'hardware' if args.bare_metal else 'vm'}\n")
         if (args.bare_metal or args.qemu) and not args.kernel:
             if args.repo or args.external_sources:
                 config.write("DISK=sdb1\n")
@@ -60,6 +66,45 @@ def create_configuration_file(args):
                 config.write(f"MIRRORS_LEN={len(args.mirrors)}\n")
             else:
                 config.write("MIRRORS_LEN=0\n")
+
+
+def validate_extra_builds(args, parser):
+    """Validate optional continuation arguments without changing base modes."""
+    selected = "gentoo" in args.extra_builds
+    if args.gentoo_config and not selected:
+        parser.error("--gentoo-config requires --extra-builds=gentoo")
+    if selected and not (args.qemu or args.bare_metal):
+        parser.error("--extra-builds=gentoo requires --qemu or --bare-metal")
+    if selected and args.tmpfs:
+        parser.error("--tmpfs cannot hold the persistent Gentoo workspace")
+    if selected and args.no_create_config:
+        parser.error("--extra-builds=gentoo requires automatic bootstrap.cfg generation")
+    return selected
+
+
+def prepare_gentoo_inputs(args, output):
+    """Create a self-contained host-validated guest input bundle."""
+    mode = "hardware" if args.bare_metal else "vm"
+    config = args.gentoo_config or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "system", "gentoo", "config.example.toml")
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "system", "gentoo", "prepare.py")
+    run(sys.executable, script, "--config", config, "--mode", mode, "--output", output)
+
+
+def start_managed_gentoo_vm(args, target, qemu_args, config_path):
+    """Prepare managed continuation disks, then launch the original bootstrap VM."""
+    run_dir = os.path.join(target.path, "gentoo-run")
+    command_path = os.path.join(target.path, "gentoo-initial-qemu.json")
+    with open(command_path, "w", encoding="utf-8") as command_file:
+        json.dump([args.qemu_cmd, *qemu_args], command_file, indent=2)
+        command_file.write("\n")
+    vm_script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "system", "gentoo", "vm.py")
+    common = [sys.executable, vm_script]
+    run_as_root(*common, "prepare", "--run-dir", run_dir, "--config", config_path,
+                "--qemu-command", command_path, "--qemu-cwd", os.getcwd(), "--apply")
+    run_as_root(*common, "start", "--run-dir", run_dir, "--apply")
 
 # pylint: disable=too-many-statements,too-many-branches
 def main():
@@ -95,6 +140,9 @@ def main():
     parser.add_argument("--build-kernels",
                         help="Also build kernels in chroot and bwrap builds",
                         action="store_true")
+    parser.add_argument("--extra-builds", choices=("gentoo",), nargs="+", default=[],
+                        help="Run the selected source-built continuation after live-bootstrap")
+    parser.add_argument("--gentoo-config", help="TOML choices for the Gentoo build and installation")
     parser.add_argument("--no-create-config",
                         help="Do not automatically create config file",
                         action="store_true")
@@ -130,6 +178,8 @@ def main():
                         action="store_true")
 
     args = parser.parse_args()
+
+    gentoo_selected = validate_extra_builds(args, parser)
 
     # Mode validation
     def check_types():
@@ -214,6 +264,17 @@ def main():
     if args.tmpfs:
         target.tmpfs(size=args.tmpfs_size)
 
+    gentoo_temp = None
+    gentoo_inputs = None
+    if gentoo_selected:
+        gentoo_temp = tempfile.TemporaryDirectory(prefix="live-bootstrap-gentoo-inputs-")
+        gentoo_inputs = os.path.join(gentoo_temp.name, "bundle")
+        try:
+            prepare_gentoo_inputs(args, gentoo_inputs)
+        except BaseException:
+            gentoo_temp.cleanup()
+            raise
+
     for server in mirror_servers:
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
@@ -227,10 +288,20 @@ def main():
                           external_sources=args.external_sources,
                           repo_path=args.repo,
                           early_preseed=args.early_preseed,
-                          mirrors=args.mirrors)
+                          mirrors=args.mirrors,
+                          gentoo_inputs=gentoo_inputs)
 
-    bootstrap(args, generator, target, args.target_size, cleanup)
+    try:
+        bootstrap(args, generator, target, args.target_size, cleanup)
+    except BaseException:
+        if gentoo_selected:
+            cleanup()
+        if gentoo_temp:
+            gentoo_temp.cleanup()
+        raise
     cleanup()
+    if gentoo_temp:
+        gentoo_temp.cleanup()
 
 def bootstrap(args, generator, target, size, cleanup):
     """Kick off bootstrap process."""
@@ -336,7 +407,12 @@ print(shutil.which('chroot'))
             ]
         if not args.interactive:
             arg_list += ['-no-reboot', '-nographic']
-        run(args.qemu_cmd, *arg_list, cleanup=cleanup)
+        if "gentoo" in args.extra_builds:
+            config_path = args.gentoo_config or os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "system", "gentoo", "config.example.toml")
+            start_managed_gentoo_vm(args, target, arg_list, config_path)
+        else:
+            run(args.qemu_cmd, *arg_list, cleanup=cleanup)
 
 if __name__ == "__main__":
     main()

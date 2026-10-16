@@ -19,6 +19,23 @@ import tempfile
 
 import requests
 
+
+def install_gentoo_after_hook(target_steps, gentoo_inputs):
+    """Bundle Gentoo inputs and add the opt-in continuation hook."""
+    guest_inputs = os.path.join(target_steps, 'gentoo-inputs')
+    shutil.copytree(gentoo_inputs, guest_inputs)
+    after_dir = os.path.join(target_steps, 'after')
+    os.makedirs(after_dir, exist_ok=True)
+    hook = os.path.join(after_dir, '90-gentoo-continuation.sh')
+    if os.path.lexists(hook):
+        raise FileExistsError(f'refusing to replace an existing after hook: {hook}')
+    with open(hook, 'w', encoding='utf-8') as script:
+        script.write('#!/bin/bash\n')
+        script.write('set -Eeuo pipefail\n')
+        script.write('echo "Starting the selected Gentoo continuation."\n')
+        script.write('bash /steps/gentoo-inputs/gentoo.sh build\n')
+    os.chmod(hook, 0o755)
+
 # pylint: disable=too-many-instance-attributes
 class Generator():
     """
@@ -29,12 +46,14 @@ class Generator():
     distfiles_dir = os.path.join(git_dir, 'distfiles')
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments
-    def __init__(self, arch, external_sources, early_preseed, repo_path, mirrors):
+    def __init__(self, arch, external_sources, early_preseed, repo_path, mirrors,
+                 gentoo_inputs=None):
         self.arch = arch
         self.early_preseed = early_preseed
         self.external_sources = external_sources
         self.repo_path = repo_path
         self.mirrors = mirrors
+        self.gentoo_inputs = gentoo_inputs
         self.source_manifest = self.get_source_manifest(not self.external_sources)
         self.early_source_manifest = self.get_source_manifest(True)
         self.target_dir = None
@@ -118,7 +137,10 @@ class Generator():
         """Copy in steps."""
         self.get_packages()
 
-        shutil.copytree(os.path.join(self.git_dir, 'steps'), os.path.join(self.target_dir, 'steps'))
+        target_steps = os.path.join(self.target_dir, 'steps')
+        shutil.copytree(os.path.join(self.git_dir, 'steps'), target_steps)
+        if self.gentoo_inputs:
+            install_gentoo_after_hook(target_steps, self.gentoo_inputs)
 
     def stage0_posix(self, kernel_bootstrap=False):
         """Copy in all of the stage0-posix"""

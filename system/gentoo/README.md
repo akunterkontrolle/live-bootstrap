@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–13
+# Gentoo continuation — integrated batches 1–14
 
 ## Prerequisites and ownership
 
@@ -46,11 +46,60 @@ a separate installed-system procedure to copy the workspace into encrypted
 integration and firmware writes remain separate.
 Passwords, passphrases, private keys and tokens do not belong in TOML/policies.
 
-Original-bootstrap integration is still deferred to batch 14: no new
-`rootfs.py` arguments or `/after` hook are enabled yet. Transporting the input
-bundle into an already booted build environment remains manual during review.
+The opt-in original-bootstrap integration is enabled by `--extra-builds
+gentoo`. It host-validates and bundles all continuation inputs, adds one
+numbered `/steps/after` hook, and leaves invocations without Gentoo selected on
+the existing path. VM disk creation and launch use the recorded `vm.py`
+lifecycle; `--cores`, `--qemu-ram`, and `--target-size` keep their existing
+ownership and meanings.
 
-## VM command sequence
+## Integrated first-run command guide
+
+1. **VM host:** create a VM-mode TOML file from `system/gentoo/config.example.toml`,
+   then run the original bootstrap with the continuation selected:
+
+   ```sh
+   ./rootfs.py --qemu --cores 18 --qemu-ram 49152 \
+     --extra-builds gentoo --gentoo-config my-gentoo.toml \
+     ...existing bootstrap arguments...
+   ```
+
+   The host validates and embeds the input bundle, prepares workspace, scratch,
+   encrypted-root, and `/extra` images under `target/gentoo-run`, then launches
+   the original bootstrap. The launcher prints a `socat` console command and
+   writes `target/gentoo-run/console.log`. Its final `/after` hook starts
+   `gentoo.sh build`.
+   When the guest shuts down at the printed modern-kernel milestone, continue
+   from the host with:
+
+   ```sh
+   sudo python3 system/gentoo/vm.py continue \
+     --run-dir target/gentoo-run --apply
+   ```
+
+   In the new guest, mount the workspace as `/build` if needed and run the
+   printed resume command. Completed receipts make that command safe to repeat.
+
+2. **T440p:** populate `hardware_disks` with observed whole-disk identities,
+   then invoke the existing bare-metal bootstrap with the same opt-in:
+
+   ```sh
+   ./rootfs.py --bare-metal --extra-builds gentoo \
+     --gentoo-config my-t440p.toml ...existing bootstrap arguments...
+   ```
+
+   Boot the generated image using the current boot procedure and the existing
+   ext4 workspace. The continuation validates the workspace and hardware disk
+   identities, then builds through the same shutdown milestone. Boot the saved
+   modern kernel with the documented continuation-root command line and resume
+   from the workspace. No hardware disk is initialized by `rootfs.py`.
+
+## Manual VM lifecycle reference
+
+The integrated `rootfs.py` command above validates, embeds, and launches the
+same inputs automatically. Use these manual steps when preparing a standalone
+continuation image or recovering a run whose original image was created without
+`--extra-builds gentoo`.
 
 1. **Host:** copy/edit `config.example.toml` and prepare a new input bundle:
 
@@ -120,7 +169,7 @@ bundle into an already booted build environment remains manual during review.
    (batch 9). Package emerge begins in batch 8. After an interruption, repeat
    steps 5–6; completed stages keep their receipts.
 
-## T440p command sequence
+## Manual T440p image and continuation reference
 
 1. **Host:** fill `hardware_disks` with observed whole-disk by-id paths, serials
    and capacity bounds; optionally constrain root/extra model and WWN. Root,
