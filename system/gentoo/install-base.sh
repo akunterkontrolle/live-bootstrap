@@ -21,6 +21,7 @@ VG=$GENTOO_SYSTEM_VOLUME_GROUP
 ROOT_GIB=$GENTOO_LAYOUT_ROOT_GIB; SWAP_GIB=$GENTOO_LAYOUT_SWAP_GIB
 RESERVE_GIB=$GENTOO_LAYOUT_RESERVE_GIB; HOME_MIN_GIB=$GENTOO_LAYOUT_HOME_MIN_GIB
 RELEASE=6.12.111; TARGET_ROOT=/mnt/gentoo-install
+BASE_GENERATION="base-$RELEASE"
 mkdir -p "$WORK_ROOT"
 if declare -p GENTOO_DRIVER_LOCK_HELD >/dev/null 2>&1 && [ "$GENTOO_DRIVER_LOCK_HELD" = 1 ]; then :; else gentoo_lock; fi
 fail() { gentoo_die "install-base: $*"; }
@@ -262,6 +263,14 @@ copy_continuation_bundle() {
     mkdir -p "$TARGET_ROOT/usr/local/sbin"
     ln -sfn "/usr/local/share/gentoo-continuation/inputs/$digest/gentoo.sh" "$TARGET_ROOT/usr/local/sbin/gentoo-continue"
     ln -sfn "/usr/local/share/gentoo-continuation/inputs/$digest/install-base.sh" "$TARGET_ROOT/usr/local/sbin/gentoo-install-base"
+    install -d -m 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo" "$TARGET_ROOT/usr/local/sbin"
+    for name in signed-generation.py signed-generation.example.toml SIGNED-GENERATIONS.md; do
+        install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name.tmp"
+        mv "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name.tmp" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
+    done
+    chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/signed-generation.py"
+    ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/signed-generation.py "$TARGET_ROOT/usr/local/sbin/ms1504-signed-generation"
+    install -m 0644 "$SCRIPT_DIR/signed-generation.example.toml" "$TARGET_ROOT/usr/share/ms1504-signed-generation.example.toml"
 }
 install_root() {
     local root_lv="/dev/$VG/root" home_lv="/dev/$VG/home" swap_lv="/dev/$VG/swap"
@@ -326,10 +335,17 @@ install_root() {
     printf 'LANG="%s"\n' "$GENTOO_SYSTEM_LOCALE" > "$TARGET_ROOT/etc/env.d/02locale"
     printf 'KEYMAP="%s"\n' "$GENTOO_SYSTEM_KEYMAP" > "$TARGET_ROOT/etc/conf.d/keymaps"
     ln -sfn "../usr/share/zoneinfo/$GENTOO_SYSTEM_TIMEZONE" "$TARGET_ROOT/etc/localtime"
-    mkdir -p "$TARGET_ROOT/etc/kernel" "$TARGET_ROOT/etc/sudoers.d" "$TARGET_ROOT/home/.gentoo-hibernate"
-    chmod 0700 "$TARGET_ROOT/home/.gentoo-hibernate"
-    printf 'rd.luks.uuid=luks-%s rd.lvm.lv=%s/root rd.lvm.lv=%s/home rd.lvm.lv=%s/swap root=/dev/mapper/%s-root resume=/dev/mapper/%s-swap ro loglevel=4 %s\n' \
-        "$luks_uuid" "$VG" "$VG" "$VG" "$VG" "$VG" "$([ "$GENTOO_MODE" = vm ] && echo 'console=tty0 console=ttyS0,115200n8' || echo 'console=tty0')" > "$TARGET_ROOT/etc/kernel/cmdline"
+    mkdir -p "$TARGET_ROOT/etc/kernel" "$TARGET_ROOT/etc/sudoers.d" "$TARGET_ROOT/home/.ms1504-hibernate"
+    chown 0:0 "$TARGET_ROOT/home/.ms1504-hibernate"
+    chmod 0700 "$TARGET_ROOT/home/.ms1504-hibernate"
+    printf 'profile=%s\nvolume_group=%s\nroot_lv=root\nhome_lv=home\nswap_lv=swap\nreserve_gib=%s\nserial=%s\nwwn=%s\nmodel=%s\nsize=%s\n' \
+        "$GENTOO_MODE" "$VG" "$RESERVE_GIB" "$ROOT_SERIAL" "$ROOT_WWN_OBSERVED" "$ROOT_MODEL_OBSERVED" "$ROOT_BYTES" \
+        > "$TARGET_ROOT/etc/ms1504-root-identity"
+    chmod 0644 "$TARGET_ROOT/etc/ms1504-root-identity"
+    printf '%s\n' "$BASE_GENERATION" > "$TARGET_ROOT/etc/ms1504-generation"
+    chmod 0644 "$TARGET_ROOT/etc/ms1504-generation"
+    printf 'rd.luks.uuid=luks-%s rd.lvm.lv=%s/root rd.lvm.lv=%s/home rd.lvm.lv=%s/swap root=/dev/mapper/%s-root resume=/dev/mapper/%s-swap ms1504.generation=%s ro loglevel=4 %s\n' \
+        "$luks_uuid" "$VG" "$VG" "$VG" "$VG" "$VG" "$BASE_GENERATION" "$([ "$GENTOO_MODE" = vm ] && echo 'console=tty0 console=ttyS0,115200n8' || echo 'console=tty0')" > "$TARGET_ROOT/etc/kernel/cmdline"
     [ -f "$TARGET_ROOT/etc/sudoers" ] || fail 'sudo configuration missing.'
     grep -Eq '^#includedir[[:space:]]+/etc/sudoers.d' "$TARGET_ROOT/etc/sudoers" || printf '\n#includedir /etc/sudoers.d\n' >> "$TARGET_ROOT/etc/sudoers"
     printf '%s ALL=(ALL:ALL) ALL\n' "$GENTOO_SYSTEM_USERNAME" > "$TARGET_ROOT/etc/sudoers.d/10-gentoo-user"
@@ -341,8 +357,12 @@ install_root() {
     install_accounts
     target_mounts
     trap 'target_unmounts; native_unmounts' EXIT
+    resume_guard="$TARGET_ROOT/usr/lib/dracut/modules.d/05ms1504-resume-guard"
+    install -d -m 0755 "$resume_guard"
+    install -m 0644 "$SCRIPT_DIR/dracut-ms1504-resume-guard/module-setup.sh" "$resume_guard/module-setup.sh"
+    install -m 0644 "$SCRIPT_DIR/dracut-ms1504-resume-guard/check-generation.sh" "$resume_guard/check-generation.sh"
     target_run depmod -a "$module_release"
-    target_run dracut --force --no-hostonly --kver "$module_release" --add 'crypt lvm resume' "/boot/initramfs-$module_release.img" "$module_release"
+    target_run dracut --force --no-hostonly --kver "$module_release" --add 'crypt lvm resume ms1504-resume-guard' "/boot/initramfs-$module_release.img" "$module_release"
     [ -s "$TARGET_ROOT/boot/initramfs-$module_release.img" ] || fail 'dracut did not create initramfs.'
     target_run locale-gen; target_run env-update
     for service in NetworkManager sysklogd; do
@@ -355,6 +375,7 @@ install_root() {
     target_run rc-update add keymaps boot; target_run visudo -c
     target_run lsinitrd "/boot/initramfs-$module_release.img" > "$STATE/initramfs-listing.txt"
     grep -Eiq 'cryptsetup|cryptroot' "$STATE/initramfs-listing.txt" && grep -Eiq 'lvm' "$STATE/initramfs-listing.txt" || fail 'initramfs lacks crypt/LVM.'
+    grep -Fq 'check-generation.sh' "$STATE/initramfs-listing.txt" || fail 'initramfs lacks the hibernation-generation guard.'
     mkdir -p "$WORK_ROOT/artifacts/installed-base"
     install -m 0644 "$TARGET_ROOT/boot/vmlinuz-$module_release" "$WORK_ROOT/artifacts/installed-base/kernel.tmp"
     install -m 0644 "$TARGET_ROOT/boot/initramfs-$module_release.img" "$WORK_ROOT/artifacts/installed-base/initramfs.tmp"

@@ -1,0 +1,20 @@
+# Copy to /etc/ms1504-signed-generation.toml and fill in the production
+# fingerprint after creating and testing the dedicated Libreboot signing key.
+[system]
+volume_group = "gentoo"
+root_lv = "root"
+home_lv = "home"
+swap_lv = "swap"
+
+[boot]
+directory = "/boot"
+public_key = "/etc/ms1504-boot/boot.key"
+signing_fingerprint = ""
+
+[snapshots]
+size_gib = 32
+maximum_data_percent = 80
+retain_generations = 2
+
+[state]
+directory = "/var/lib/ms1504-generations"

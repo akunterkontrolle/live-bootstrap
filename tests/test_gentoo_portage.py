@@ -221,7 +221,7 @@ portage_emerge --pretend @world
         self.assertIn('plan_is_empty "$STATE/native-base-runtime-world-plan.txt"', stage)
         self.assertIn('grep -Fxq \'CONFIG_DM_CRYPT=y\'', stage)
         self.assertIn('ACCEPT_LICENSE="-* @FREE"', stage)
-        for atom in ('sys-fs/cryptsetup', 'sys-fs/lvm2', 'sys-kernel/dracut',
+        for atom in ('sys-fs/cryptsetup', 'sys-fs/lvm2', 'sys-kernel/dracut', 'sys-boot/grub',
                      'net-misc/networkmanager', 'app-admin/passwdqc',
                      '=sys-kernel/linux-firmware-20260916'):
             self.assertIn(atom, packages)

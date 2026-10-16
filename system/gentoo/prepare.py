@@ -14,6 +14,11 @@ from lib.gentoo_config import load, render, root_image_gib
 # Extend this list in the batch that adds each runtime artifact.
 BUNDLE_FILES = (
     'gentoo.sh', 'install-base.sh', 'lib/common.sh', 'lib/devices.sh', 'lib/storage.sh', 'lib/state.sh',
+    'signed-generation.py', 'signed-generation.example.toml', 'SIGNED-GENERATIONS.md',
+    'install-signed-generation-tools.sh', 'export-boot-signing-key.sh',
+    'harden-libreboot-payload.sh', 'firmware-build-receipt.sh', 'firmware-flash.sh',
+    'dracut-ms1504-resume-guard/module-setup.sh',
+    'dracut-ms1504-resume-guard/check-generation.sh',
     'lib/sources.sh', 'stages/00-inputs.sh',
     'lib/toolchain.sh', 'stages/10-host-preflight.sh',
     'stages/11-binutils-elf.sh', 'stages/12-gcc-elf.sh',

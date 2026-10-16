@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–10
+# Gentoo continuation — batches 1–11
 
 ## Prerequisites and ownership
 
@@ -161,7 +161,9 @@ bundle into an already booted build environment remains manual during review.
    Wired e1000e, essential storage, console/input and USB drivers are built in;
    Wi-Fi firmware is introduced with the runtime policy in batch 9. Validate
    actual T440p devices separately; VM support does not establish hardware
-   acceptance. The signed hardware boot/update path arrives in batch 11.
+   acceptance. Batch 11 installs the signed generation manager, but it does not
+   modify existing firmware. Follow [SIGNED-GENERATIONS.md](SIGNED-GENERATIONS.md)
+   for the hardware-specific key setup and acceptance boundary.
 
 ## Recorded VM invocation and image ownership
 
@@ -784,6 +786,47 @@ sudo python3 system/gentoo/vm.py boot-installed \
 This boots the installed kernel/initramfs directly with recorded QEMU resources
 and the encrypted root's LUKS/LVM command line. The initramfs prompts for the
 LUKS passphrase. It does not depend on GRUB, Libreboot or signing. Hardware
-remains on its existing bootstrap boot path at this batch; signed boot and
-generation management are batch 11. No real disk initialization or guest
-installation was run while preparing this batch.
+remains on its existing bootstrap boot path until the reviewed signed boot is
+initialized. No real disk initialization or guest installation was run while
+preparing this batch.
+
+## Batch 11: signed T440p generations and firmware boundary
+
+The installed hardware root now includes `/etc/ms1504-root-identity`, a
+generation marker, a dracut hibernation-generation guard, and the reviewed
+`ms1504-signed-generation` command. The manager deliberately refuses the VM
+profile. On hardware, prepare a dedicated OpenPGP key offline, copy the binary
+public key to `/etc/ms1504-boot/boot.key`, and configure the example at
+`/etc/ms1504-signed-generation.toml`. Its fingerprint must match the public
+key, and the LVM snapshot reserve must cover the configured retained count.
+See [SIGNED-GENERATIONS.md](SIGNED-GENERATIONS.md) for exact setup, update,
+rollback, pruning, and offline-merge commands.
+
+The initial signed boot requires firmware GRUB that already trusts the key and
+enforces signatures. The payload-hardening helper is generic and hash-pinned,
+but no T440p ROM is produced here: the exact working Libreboot revision,
+matching build tools, and board-specific data must be identified and audited
+on the actual machine. The optional internal flash helper is not part of
+installation or updates. Its read-only preflight, dual verified backups, exact
+confirmation, and post-write readback do not replace external recovery.
+Flashrom documents embedded-controller risks for laptops in its
+[laptop guidance](https://flashrom.org/Laptops).
+
+For updates, `begin` makes and verifies the rollback snapshot before package
+work. `status` reports snapshot COW usage; no cleanup happens automatically.
+`seal` publishes a new signed default only after both kernel artifacts and the
+menu pass verification. Explicit rollback selects a retained boot entry;
+explicit prune removes one generation after a typed confirmation. Offline
+snapshot merge requires recovery media and leaves durable receipts for
+inspection after interruption. Two previous generations are retained by
+default, subject to the configured reserve. Signed generations do not prevent
+replay of an older valid signed image because this flow has no TPM-backed
+anti-replay state.
+
+Batch 11's checks are host-only unit fixtures, shell/Python syntax checks, and
+repository regressions. They do not test real T440p firmware, a flash chip,
+encrypted boot, snapshot merge, or a token. Hardware acceptance still needs
+backup/preflight, signed boot, tamper rejection, rollback, offline recovery,
+and device/power-management checks. The complete VM replay remains an
+end-of-series requirement; this batch preserves its direct kernel/initramfs
+boot path.

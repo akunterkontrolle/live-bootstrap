@@ -22,6 +22,7 @@ sys-fs/cryptsetup
 sys-fs/e2fsprogs
 sys-fs/lvm2
 sys-kernel/dracut
+sys-boot/grub
 sys-libs/timezone-data
 sys-process/psmisc
 sys-apps/smartmontools
