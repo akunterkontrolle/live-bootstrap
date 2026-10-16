@@ -1,5 +1,6 @@
 # Source-built runtime packages for the encrypted OpenRC base and recovery.
 app-admin/sudo
+app-admin/passwdqc
 app-admin/sysklogd
 app-crypt/gnupg
 app-misc/mc

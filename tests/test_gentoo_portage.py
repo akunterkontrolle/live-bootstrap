@@ -222,7 +222,8 @@ portage_emerge --pretend @world
         self.assertIn('grep -Fxq \'CONFIG_DM_CRYPT=y\'', stage)
         self.assertIn('ACCEPT_LICENSE="-* @FREE"', stage)
         for atom in ('sys-fs/cryptsetup', 'sys-fs/lvm2', 'sys-kernel/dracut',
-                     'net-misc/networkmanager', '=sys-kernel/linux-firmware-20260916'):
+                     'net-misc/networkmanager', 'app-admin/passwdqc',
+                     '=sys-kernel/linux-firmware-20260916'):
             self.assertIn(atom, packages)
         use = (GENTOO / 'policy/defaults/base-package.use').read_text()
         self.assertIn('sys-fs/cryptsetup argon2', use)

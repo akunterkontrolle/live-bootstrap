@@ -13,7 +13,7 @@ from lib.gentoo_config import load, render, root_image_gib
 
 # Extend this list in the batch that adds each runtime artifact.
 BUNDLE_FILES = (
-    'gentoo.sh', 'lib/common.sh', 'lib/devices.sh', 'lib/state.sh',
+    'gentoo.sh', 'install-base.sh', 'lib/common.sh', 'lib/devices.sh', 'lib/storage.sh', 'lib/state.sh',
     'lib/sources.sh', 'stages/00-inputs.sh',
     'lib/toolchain.sh', 'stages/10-host-preflight.sh',
     'stages/11-binutils-elf.sh', 'stages/12-gcc-elf.sh',

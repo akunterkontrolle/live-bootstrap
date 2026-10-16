@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–9
+# Gentoo continuation — batches 1–10
 
 ## Prerequisites and ownership
 
@@ -720,3 +720,70 @@ existing workspace scratch directory and its larger free-space requirement.
 Static checks validate the package policy, stage order, bundle manifest and
 shell syntax. A fresh guest merge has not yet been run and remains part of the
 final VM replay.
+
+## Batch 10: encrypted installed base
+
+These commands run only after batch 9 has built the native Gentoo root and
+runtime. The installer resolves the root disk again from its recorded VM
+serial/capacity or the configured hardware by-id path, serial and capacity
+bounds. It identifies boot/workspace and extra disks separately and protects
+them. Hardware additionally checks configured root/extra WWN and model values.
+The target root must be unmounted and cannot back `/build`; workspace, boot and
+extra media remain in use.
+
+In the guest, inspect the proposal first:
+
+```sh
+bash /build/gentoo-bootstrap/inputs/INPUT_DIGEST/gentoo.sh plan
+```
+
+The exact durable input path is printed by `gentoo.sh build` and is recorded at
+`/build/gentoo-bootstrap/current-inputs`. To initialize a new target, run the
+following interactively, verify the displayed disk identity, and type the
+exact `ERASE <serial> <major:minor>` line. It creates GPT and LUKS2, prompts
+twice for a passphrase, then creates LVM root/swap/home and filesystems:
+
+```sh
+bash /build/gentoo-bootstrap/inputs/INPUT_DIGEST/gentoo.sh storage-init
+```
+
+After interruption, use `plan` to inspect receipts and detected disk state.
+Resume only after durable start, target, partition and LUKS receipts agree:
+
+```sh
+bash /build/gentoo-bootstrap/inputs/INPUT_DIGEST/gentoo.sh storage-resume
+```
+
+Ambiguous or partially written destructive state stops for inspection;
+resumption never repartitions or formats a completed volume. Once storage is
+complete, install or resume the encrypted root:
+
+```sh
+bash /build/gentoo-bootstrap/inputs/INPUT_DIGEST/gentoo.sh install-root
+```
+
+This prompts for the LUKS passphrase and new root/user passwords (never stored
+in configuration or logs), copies the source-built base, installs the kernel,
+modules and exact verified continuation bundle, configures accounts, password
+policy, locale, keymap, timezone, OpenRC services, sudo and LVM-backed fstab,
+then builds and checks a crypt/LVM initramfs. Root installation can be repeated
+without repartitioning or reformatting. Receipts and boot artifacts stay on the
+workspace; installed kernel/initramfs copies are bound to a durable hash
+receipt. The storage receipt binds the disk identity and configured LV layout;
+changing either after initialization stops resumption for inspection. The base
+runtime policy now includes `app-admin/passwdqc`; its changed policy fingerprint
+rebuilds stage 90 on the next `gentoo.sh build` run before installation.
+
+For VM acceptance, shut down the guest cleanly and on the host run:
+
+```sh
+sudo python3 system/gentoo/vm.py boot-installed \
+  --run-dir OUT/gentoo-run --apply
+```
+
+This boots the installed kernel/initramfs directly with recorded QEMU resources
+and the encrypted root's LUKS/LVM command line. The initramfs prompts for the
+LUKS passphrase. It does not depend on GRUB, Libreboot or signing. Hardware
+remains on its existing bootstrap boot path at this batch; signed boot and
+generation management are batch 11. No real disk initialization or guest
+installation was run while preparing this batch.

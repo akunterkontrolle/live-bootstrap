@@ -398,6 +398,28 @@ def verify_handoff(build, workspace_uuid):
     return artifacts, metadata
 
 
+def verify_installed_cmdline(commandline):
+    args = commandline.split()
+    if not args or any(not re.fullmatch(r'[A-Za-z0-9=._:/,+-]+', value) for value in args):
+        raise ValueError('Installed kernel command line contains an unsafe token')
+    roots = [value for value in args if value.startswith('root=')]
+    luks = [value for value in args if value.startswith('rd.luks.uuid=')]
+    lv_roots = [value for value in args if value.startswith('rd.lvm.lv=')]
+    if (len(roots) != 1 or not re.fullmatch(r'root=/dev/mapper/[A-Za-z0-9+_.-]+-root', roots[0]) or
+            len(luks) != 1 or not re.fullmatch(r'rd.luks.uuid=luks-[0-9a-fA-F-]{36}', luks[0]) or
+            sorted(lv_roots) != sorted(set(lv_roots)) or
+            set(lv_roots) != {f'rd.lvm.lv={roots[0].split("/")[-1][:-5]}/root',
+                              f'rd.lvm.lv={roots[0].split("/")[-1][:-5]}/home',
+                              f'rd.lvm.lv={roots[0].split("/")[-1][:-5]}/swap'} or args.count('ro') != 1 or 'rw' in args):
+        raise ValueError('Installed kernel command line does not select the encrypted root layout')
+    if any(value.startswith(('init=', 'rootfstype=', 'gentoo_')) for value in args):
+        raise ValueError('Installed kernel command line contains a bootstrap-only override')
+    expected_resume = f'resume=/dev/mapper/{roots[0].split("/")[-1][:-5]}-swap'
+    if args.count(expected_resume) != 1:
+        raise ValueError('Installed kernel command line does not select the configured swap LV')
+    return args
+
+
 @contextmanager
 def workspace_mount(item):
     if os.geteuid() != 0:
@@ -442,7 +464,7 @@ def stage_kernel(directory, record):
         return destination / 'bzImage', metadata
 
 
-def command(record, directory, kernel=None):
+def command(record, directory, kernel=None, initrd=None, kernel_append=None):
     argv = [record['executable'], *record['base_options']]
     for index, item in enumerate(record['bootstrap_disks']):
         # Serial belongs to the IDE device, not the raw/qcow2 block driver.
@@ -455,11 +477,21 @@ def command(record, directory, kernel=None):
                      '-device', f'usb-storage,drive=gt_{role},bus=gentoo_ehci.0,serial={item["serial"]}'])
     if kernel:
         free_kib = shutil.disk_usage(directory).free // 1024
+        boot_disk = record['bootstrap_disks'][0]
+        root_image = record['images']['root']
+        extra_image = record['images']['extra']
         argv.extend(['-kernel', str(kernel), '-append',
                      f'root={record["bootstrap_root"]} rootfstype=ext4 init=/bin/bash rw rootwait '
                      'console=tty0 console=ttyS0,115200n8 '
                      f'gentoo_scratch_uuid={record["images"]["scratch"]["uuid"]} '
+                     f'gentoo_root_serial={root_image["serial"]} gentoo_root_bytes={root_image["bytes"]} '
+                     f'gentoo_boot_serial={boot_disk["serial"]} gentoo_boot_bytes={boot_disk.get("bytes", 1)} '
+                     f'gentoo_extra_serial={extra_image["serial"]} gentoo_extra_bytes={extra_image["bytes"]} '
                      f'gentoo_workspace_host_free_kib={free_kib} gentoo_scratch_host_free_kib={free_kib}'])
+        if initrd:
+            argv.extend(['-initrd', str(initrd)])
+        if kernel_append:
+            argv[argv.index('-append') + 1] = kernel_append
     else:
         argv.extend(record['boot_options'])
     serial, qmp = directory / 'serial.sock', directory / 'qmp.sock'
@@ -475,16 +507,75 @@ def command(record, directory, kernel=None):
     return argv
 
 
-def launch(directory, record, continuation):
+def stage_installed_boot(directory, record):
+    """Copy the receipt-bound installed kernel/initramfs from offline workspace."""
+    item = record['images']['workspace']
+    with workspace_mount(item) as mounted:
+        build = mounted / 'gentoo-bootstrap'
+        state = build / 'install-base-state'
+        receipt_path = regular(state / 'installed-boot.receipt')
+        receipts = {}
+        for line in receipt_path.read_text().splitlines():
+            if '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            if key in receipts:
+                raise ValueError(f'Duplicate installed-boot receipt field: {key}')
+            receipts[key] = value
+        required = {'release', 'kernel sha256', 'initramfs sha256', 'workspace UUID', 'cmdline'}
+        if set(receipts) != required or receipts['release'] != RELEASE:
+            raise ValueError('Installed-boot receipt is incomplete or has an unsupported release')
+        if receipts['workspace UUID'].lower() != item['uuid'].lower():
+            raise ValueError('Installed-boot receipt belongs to another workspace')
+        if not re.fullmatch(r'[0-9a-f]{64}', receipts['kernel sha256']) or not re.fullmatch(r'[0-9a-f]{64}', receipts['initramfs sha256']):
+            raise ValueError('Installed-boot artifact digest is malformed')
+        verify_installed_cmdline(receipts['cmdline'])
+        if not (state / 'storage.done').is_file() or not (state / 'root-install.done').is_file():
+            raise ValueError('Encrypted storage or root-install receipt is missing')
+        source = build / 'artifacts' / 'installed-base'
+        kernel_source = regular(source / 'kernel')
+        initrd_source = regular(source / 'initramfs')
+        if digest(kernel_source) != receipts['kernel sha256'] or digest(initrd_source) != receipts['initramfs sha256']:
+            raise ValueError('Installed kernel or initramfs differs from its durable receipt')
+        check_kernel(kernel_source)
+        identity = receipts['initramfs sha256']
+        destination = directory / 'kernels' / 'installed-base' / identity
+        if destination.exists():
+            if digest(regular(destination / 'kernel')) != receipts['kernel sha256'] or digest(regular(destination / 'initramfs')) != identity:
+                raise ValueError('Staged installed boot artifacts differ from the workspace receipt')
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=destination.parent, prefix='.installed-boot-') as temporary:
+                pending = Path(temporary) / 'bundle'
+                pending.mkdir()
+                shutil.copyfile(kernel_source, pending / 'kernel')
+                shutil.copyfile(initrd_source, pending / 'initramfs')
+                atomic_json(pending / 'receipt.json', receipts)
+                pending.rename(destination)
+                sync_directory(destination.parent)
+        return destination / 'kernel', destination / 'initramfs', receipts['cmdline'], receipts
+
+
+def launch(directory, record, continuation, installed=False):
     check_idle(all_images(record))
     for item in all_images(record):
         inspect_image(item, filesystem='uuid' in item)
     for name in ('serial.sock', 'qmp.sock'):
         if (directory / name).exists():
             raise ValueError(f'Socket already exists; inspect its owner before removing: {directory / name}')
-    kernel, handoff = stage_kernel(directory, record) if continuation else (None, None)
-    argv = command(record, directory, kernel)
-    atomic_json(directory / 'last-launch.json', {'argv': argv, 'cpus': record['cpus'], 'ram_mib': record['ram_mib'], 'handoff': handoff})
+    handoff = None
+    installed_boot = None
+    if continuation:
+        kernel, handoff = stage_kernel(directory, record)
+    elif installed:
+        kernel, initrd, cmdline, installed_boot = stage_installed_boot(directory, record)
+        argv = command(record, directory, kernel, initrd, cmdline)
+    else:
+        kernel = None
+    if not installed:
+        argv = command(record, directory, kernel)
+    atomic_json(directory / 'last-launch.json', {'argv': argv, 'cpus': record['cpus'], 'ram_mib': record['ram_mib'],
+                                                 'handoff': handoff, 'installed_boot': installed_boot})
     print(f'Console: socat -,raw,echo=0 UNIX-CONNECT:{directory}/serial.sock', flush=True)
     if handoff:
         print(f'Guest after mounting the workspace at /build: bash /build/gentoo-bootstrap/handoff/{handoff["inputs"]}/resume.sh', flush=True)
@@ -498,7 +589,7 @@ def launch(directory, record, continuation):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('stage', choices=('prepare', 'start', 'continue', 'status'))
+    parser.add_argument('stage', choices=('prepare', 'start', 'continue', 'boot-installed', 'status'))
     parser.add_argument('--run-dir', type=Path, required=True)
     parser.add_argument('--config', type=Path)
     parser.add_argument('--qemu-command', type=Path, help='JSON array containing the original rootfs.py QEMU command')
@@ -543,7 +634,7 @@ def main():
                 print('held by a lifecycle operation/VM')
         elif args.apply:
             with run_lock(directory):
-                launch(directory, record, args.stage == 'continue')
+                launch(directory, record, args.stage == 'continue', args.stage == 'boot-installed')
         else:
             print(f'{args.stage}: {record["cpus"]} CPUs, {record["ram_mib"]} MiB; original image paths from {directory / RECORD}')
             print('Plan only; no images mounted and no VM started.')

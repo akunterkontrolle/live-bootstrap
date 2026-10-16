@@ -4,7 +4,12 @@ set -Eeuo pipefail
 umask 077
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
 . "$SCRIPT_DIR/lib/common.sh"
-case "${1:-build}" in build|status) command=${1:-build} ;; *) gentoo_die 'usage: bash gentoo.sh [build|status]' ;; esac
+case "${1:-build}" in
+    build|status) command=${1:-build} ;;
+    plan) command=install-plan ;;
+    storage-init|storage-resume|install-root) command=$1 ;;
+    *) gentoo_die 'usage: bash gentoo.sh [build|status|plan|storage-init|storage-resume|install-root]' ;;
+esac
 [ "$#" -le 1 ] || gentoo_die 'unexpected arguments'
 [ "$(id -u)" = 0 ] || gentoo_die 'run in the bootstrap guest as root'
 [ ! -d /run/gentoo-shutdown-in-progress ] || gentoo_die 'shutdown is in progress'
@@ -56,6 +61,19 @@ gentoo_persist_bundle "$SCRIPT_DIR"
 . "$SCRIPT_DIR/lib/sources.sh"
 cd "$SCRIPT_DIR"
 . "$SCRIPT_DIR/stages/00-inputs.sh"
+if [ "$command" != build ]; then
+    GENTOO_DRIVER_LOCK_HELD=1
+    export GENTOO_DRIVER_LOCK_HELD
+    case "$command" in
+        install-plan) installer_mode=--plan ;;
+        storage-init) installer_mode=--initialize-storage ;;
+        storage-resume) installer_mode=--resume-storage ;;
+        install-root) installer_mode=--install-root ;;
+        *) gentoo_die 'invalid installer command' ;;
+    esac
+    bash "$SCRIPT_DIR/install-base.sh" "$installer_mode"
+    exit 0
+fi
 . "$SCRIPT_DIR/lib/toolchain.sh"
 . "$SCRIPT_DIR/stages/10-host-preflight.sh"
 . "$SCRIPT_DIR/stages/11-binutils-elf.sh"

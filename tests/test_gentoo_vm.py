@@ -91,6 +91,10 @@ class VMTests(unittest.TestCase):
         self.assertEqual(command[command.index('-smp') + 1], '18')
         self.assertEqual(command[command.index('-m') + 1], '49152M')
         self.assertIn(f'gentoo_scratch_uuid={record["images"]["scratch"]["uuid"]}', command[command.index('-append') + 1])
+        args = command[command.index('-append') + 1]
+        self.assertIn(f'gentoo_root_serial={record["images"]["root"]["serial"]}', args)
+        self.assertIn(f'gentoo_extra_serial={record["images"]["extra"]["serial"]}', args)
+        self.assertIn(f'gentoo_boot_serial={record["bootstrap_disks"][0]["serial"]}', args)
         self.assertIn('init=/bin/bash', command[command.index('-append') + 1])
         self.assertNotIn('-bios', command)
         self.assertNotIn('-no-shutdown', command)
@@ -99,6 +103,33 @@ class VMTests(unittest.TestCase):
         vm.atomic_json(self.run_dir / vm.RECORD, restored)
         with self.assertRaises(ValueError):
             vm.read_record(self.run_dir)
+
+    def test_installed_base_boot_requires_encrypted_root_arguments(self):
+        append = ('rd.luks.uuid=luks-11111111-1111-4111-8111-111111111111 '
+                  'rd.lvm.lv=gentoo/root rd.lvm.lv=gentoo/home rd.lvm.lv=gentoo/swap '
+                  'root=/dev/mapper/gentoo-root resume=/dev/mapper/gentoo-swap ro '
+                  'console=tty0 console=ttyS0,115200n8')
+        self.assertIn('root=/dev/mapper/gentoo-root', vm.verify_installed_cmdline(append))
+        for invalid in (append.replace('rd.luks.uuid=', 'luks.uuid='),
+                        append.replace('rd.lvm.lv=gentoo/home ', ''),
+                        append + ' init=/bin/bash',
+                        append.replace('ro ', 'rw ')):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                vm.verify_installed_cmdline(invalid)
+
+    def test_installed_base_qemu_arguments_use_the_saved_kernel_initramfs_and_cmdline(self):
+        record = self.record()
+        kernel = self.directory / 'installed-kernel'
+        initrd = self.directory / 'installed-initramfs'
+        kernel.write_bytes(b'kernel')
+        initrd.write_bytes(b'initrd')
+        append = ('rd.luks.uuid=luks-11111111-1111-4111-8111-111111111111 '
+                  'rd.lvm.lv=gentoo/root rd.lvm.lv=gentoo/home rd.lvm.lv=gentoo/swap '
+                  'root=/dev/mapper/gentoo-root resume=/dev/mapper/gentoo-swap ro console=ttyS0')
+        command = vm.command(record, self.run_dir, kernel, initrd, append)
+        self.assertEqual(command[command.index('-kernel') + 1], str(kernel))
+        self.assertEqual(command[command.index('-initrd') + 1], str(initrd))
+        self.assertEqual(command[command.index('-append') + 1], append)
 
     def test_record_rejects_separate_resource_and_disk_identity_edits(self):
         for edit in ('ram', 'serial'):
