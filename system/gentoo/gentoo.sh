@@ -7,6 +7,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
 case "${1:-build}" in build|status) command=${1:-build} ;; *) gentoo_die 'usage: bash gentoo.sh [build|status]' ;; esac
 [ "$#" -le 1 ] || gentoo_die 'unexpected arguments'
 [ "$(id -u)" = 0 ] || gentoo_die 'run in the bootstrap guest as root'
+[ ! -d /run/gentoo-shutdown-in-progress ] || gentoo_die 'shutdown is in progress'
 gentoo_verify_bundle "$SCRIPT_DIR"
 . "$SCRIPT_DIR/config.sh"
 . "$SCRIPT_DIR/lib/devices.sh"
@@ -16,6 +17,7 @@ WORK_ROOT=/build/gentoo-bootstrap
 export WORK_ROOT
 mkdir -p "$WORK_ROOT"
 gentoo_lock
+[ ! -d /run/gentoo-shutdown-in-progress ] || gentoo_die 'shutdown is in progress'
 mkdir -p "$WORK_ROOT/logs" "$WORK_ROOT/state"
 if [ "$command" = status ]; then
     find "$WORK_ROOT/state" -maxdepth 1 -name '*.done' -print | LC_ALL=C sort
@@ -66,5 +68,7 @@ cd "$SCRIPT_DIR"
 . "$SCRIPT_DIR/stages/18-gcc-linux-runtime.sh"
 . "$SCRIPT_DIR/stages/19-glibc.sh"
 . "$SCRIPT_DIR/stages/20-verify-sysroot.sh"
-printf 'Batch 2 complete. The continuation kernel is added in batch 3.\n'
+. "$SCRIPT_DIR/stages/30-kernel.sh"
+. "$SCRIPT_DIR/stages/31-kernel-modules.sh"
+. "$SCRIPT_DIR/stages/32-handoff.sh"
 printf 'Resume: bash %s/gentoo.sh build\n' "$SCRIPT_DIR"

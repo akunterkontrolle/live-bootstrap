@@ -1,0 +1,2 @@
+# Detached signature over the uncompressed .tar stream. See SOURCES.md.
+linux-6.12.111.tar.sign|https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.111.tar.sign|sha512=414898be73cbf219c3db5bc6f6a8d660ea5ae858b7bb7f84c9d8d185b87d6d21d71082f04170e3dae9f9244a8d8445611e770f669995b8290a9bb1aa78903ed2

@@ -157,7 +157,7 @@ done
         driver = (GENTOO / 'gentoo.sh').read_text()
         stages = re.findall(r'\. "\$SCRIPT_DIR/(stages/[^"]+)"', driver)
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual(stages[-1], 'stages/20-verify-sysroot.sh')
+        self.assertEqual(stages[-1], 'stages/32-handoff.sh')
         self.assertTrue(set(stages) <= set(prepare.BUNDLE_FILES))
         seen = set()
         for stage in stages:

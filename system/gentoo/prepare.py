@@ -24,6 +24,10 @@ BUNDLE_FILES = (
     'sources/binutils.lock', 'sources/gcc.lock', 'sources/glibc.lock',
     'sources/linux.lock', 'sources/argp.lock', 'sources/elfutils.lock',
     'sources/rsync.lock',
+    'kernel-6.12.111.config.fragment', 'lib/kernel.sh',
+    'stages/30-kernel.sh', 'stages/31-kernel-modules.sh',
+    'stages/32-handoff.sh', 'post-reboot.sh', 'shutdown.sh',
+    'sources/linux-signature.lock', 'keys/kernel-release.gpg',
 )
 
 
