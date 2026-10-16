@@ -1,0 +1,2 @@
+# Permit the reviewed source Rust bootstrap seed if the pinned repository marks it testing.
+dev-lang/mrustc ~amd64

@@ -1,0 +1,8 @@
+# Keep the pinned ESR browser source-built and avoid optional binary WASI/GMP downloads.
+www-client/firefox:esr eme-free -gmp-autoupdate -wasm-sandbox -telemetry
+dev-lang/rust mrustc-bootstrap system-llvm -test
+llvm-core/llvm:20 llvm_targets_X86
+xfce-base/xfce4-meta -cdr
+# PipeWire provides PulseAudio compatibility for the Xfce desktop.
+media-video/pipewire sound-server pulseaudio bluetooth dbus elogind pipewire-alsa -system-service -systemd
+media-video/wireplumber elogind -system-service -systemd

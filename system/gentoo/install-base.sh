@@ -26,6 +26,12 @@ mkdir -p "$WORK_ROOT"
 if declare -p GENTOO_DRIVER_LOCK_HELD >/dev/null 2>&1 && [ "$GENTOO_DRIVER_LOCK_HELD" = 1 ]; then :; else gentoo_lock; fi
 fail() { gentoo_die "install-base: $*"; }
 sha256() { sha256sum < "$1" | awk '{print $1}'; }
+tree_sha256() {
+    ( cd "$1"; { find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum; \
+        LC_ALL=C find . -type f -printf 'F %m %p\n' | LC_ALL=C sort; \
+        LC_ALL=C find . -type d -printf 'D %m %p\n' | LC_ALL=C sort; \
+        LC_ALL=C find . -type l -printf 'L %m %p -> %l\n' | LC_ALL=C sort; } | sha256sum | awk '{print $1}');
+}
 read_secret() { local prompt=$1 variable=$2; printf '%s' "$prompt" > /dev/tty; IFS= read -r -s "$variable" < /dev/tty; printf '\n' > /dev/tty; }
 read_tty_line() { local prompt=$1 variable=$2; printf '%s' "$prompt" > /dev/tty; IFS= read -r "$variable" < /dev/tty; }
 vm_identity() {
@@ -280,6 +286,18 @@ copy_continuation_bundle() {
     install -m 0644 "$SCRIPT_DIR/setup-extra.sh" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh "$TARGET_ROOT/usr/local/sbin/ms1504-extra"
+    for name in complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
+        install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
+    done
+    for name in "${GENTOO_PACKAGES_DESKTOP:-}" "${GENTOO_PACKAGES_DESKTOP_USE:-}" \
+        "${GENTOO_PACKAGES_DESKTOP_KEYWORDS:-}" "${GENTOO_PACKAGES_DESKTOP_MASK:-}"; do
+        [ -n "$name" ] || continue
+        [[ "$name" =~ ^policy/[A-Za-z0-9_.+-]+$ ]] || fail "unsafe desktop policy input path: $name"
+        install -D -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
+    done
+    chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/complete-desktop.sh"
+    chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/desktop-rust-bootstrap.py"
+    ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/complete-desktop.sh "$TARGET_ROOT/usr/local/sbin/complete-desktop"
 }
 install_root() {
     local root_lv="/dev/$VG/root" home_lv="/dev/$VG/home" swap_lv="/dev/$VG/swap"
@@ -357,6 +375,12 @@ install_root() {
     chmod 0644 "$TARGET_ROOT/etc/ms1504-extra-identity"
     printf '%s\n' "$BASE_GENERATION" > "$TARGET_ROOT/etc/ms1504-generation"
     chmod 0644 "$TARGET_ROOT/etc/ms1504-generation"
+    repo_commit=5548522e2c2fa10a4c009348e9ba84c44783f47d
+    [ -d "$TARGET_ROOT/usr/portage/profiles" ] || fail 'pinned Gentoo repository is missing from the installation root.'
+    install -d -m 0755 "$TARGET_ROOT/usr/share/gentoo-continuation"
+    printf 'repository commit=%s\nrepository tree sha256=%s\n' "$repo_commit" "$(tree_sha256 "$TARGET_ROOT/usr/portage")" \
+        > "$TARGET_ROOT/usr/share/gentoo-continuation/gentoo-source-receipt"
+    chmod 0644 "$TARGET_ROOT/usr/share/gentoo-continuation/gentoo-source-receipt"
     printf 'rd.luks.uuid=luks-%s rd.lvm.lv=%s/root rd.lvm.lv=%s/home rd.lvm.lv=%s/swap root=/dev/mapper/%s-root resume=/dev/mapper/%s-swap ms1504.generation=%s ro loglevel=4 %s\n' \
         "$luks_uuid" "$VG" "$VG" "$VG" "$VG" "$VG" "$BASE_GENERATION" "$([ "$GENTOO_MODE" = vm ] && echo 'console=tty0 console=ttyS0,115200n8' || echo 'console=tty0')" > "$TARGET_ROOT/etc/kernel/cmdline"
     [ -f "$TARGET_ROOT/etc/sudoers" ] || fail 'sudo configuration missing.'

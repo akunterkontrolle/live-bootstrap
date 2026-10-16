@@ -1,0 +1,15 @@
+gnome-extra/nm-applet
+gui-libs/display-manager-init
+media-sound/pavucontrol
+media-video/pipewire
+media-video/wireplumber
+media-video/vlc
+net-wireless/blueman
+net-wireless/bluez
+sys-auth/elogind
+dev-lang/rust
+=www-client/firefox-140.16.0
+x11-base/xorg-server
+x11-misc/lightdm
+x11-misc/lightdm-gtk-greeter
+xfce-base/xfce4-meta

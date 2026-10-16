@@ -1,4 +1,4 @@
-# Gentoo continuation — batches 1–11
+# Gentoo continuation — batches 1–13
 
 ## Prerequisites and ownership
 
@@ -894,3 +894,49 @@ than retry if a destructive operation has no matching receipt. VM and hardware
 use the same disk-identity, capacity, migration, and content checks; hardware
 also requires the configured physical by-id path, WWN, and model. These fixtures
 do not replace a fresh VM replay or actual T440p acceptance.
+
+## Batch 13: source-built desktop and installed-system acceptance
+
+After encrypted `/extra` is restored and mounted, `sudo complete-desktop` reads
+the installed bundle and recorded source-built Portage settings. It verifies
+the pinned Gentoo repository tree, selects a source Rust bootstrap chain from
+visible ebuilds, builds each Rust minor in order, then saves an emerge plan and
+fetches verified source archives to `/extra` before building Firefox, Xorg,
+Xfce, LightDM, PipeWire, WirePlumber, VLC, Bluetooth, and the selected desktop
+utilities. CD burning is disabled in the Xfce meta package policy. The script
+retains Portage distfiles, logs, and temporary build files on encrypted
+`/extra`; atomic stage receipts allow rerunning the command after interruption.
+It verifies LightDM/Xfce login, PipeWire session autostart, installed package
+atoms, and OpenRC service registration on every run. Package selection can be
+overridden with the existing `packages.desktop`, `desktop_use`,
+`desktop_keywords`, and `desktop_mask` TOML paths.
+
+On the **T440p**, wrap the package change in the signed-generation transaction.
+With signing key media connected (or the OpenPGP token available), create the
+rollback snapshot before building, then sign and publish the installed
+kernel/initramfs after the desktop command succeeds:
+
+```sh
+sudo ms1504-signed-generation --secret-key-file /media/keys/secret-key.gpg begin
+sudo complete-desktop
+sudo ms1504-signed-generation --secret-key-file /media/keys/secret-key.gpg \
+  seal --generation desktop-2026-10 --kernel /boot/vmlinuz-6.12.111 \
+  --initramfs /boot/initramfs-6.12.111.img
+sudo ms1504-signed-generation status
+```
+
+Choose a new generation name for each update. With an OpenPGP token, substitute
+`--gnupg-home /root/.gnupg`. If the desktop build fails, leave the rollback
+generation selected and inspect manager status and `/extra/portage/logs` before
+resuming. On a **VM**, run `sudo complete-desktop` directly; QEMU boots the
+installed kernel/initramfs unsigned and does not invoke the hardware manager.
+Reboot to test login, NetworkManager connectivity, Bluetooth, PipeWire audio,
+volume control, and a clean shutdown. CD burning remains off.
+
+Hardware acceptance checklist: confirm the signed generation is the default;
+log in through LightDM to Xfce; test wired networking and Wi-Fi, Bluetooth, and
+PipeWire output/input with pavucontrol; verify resume protection still rejects
+a mismatched hibernation generation; reboot cleanly and confirm the same signed
+generation starts. Run `sudo ms1504-signed-generation status` after reboot and
+retain the result with the acceptance notes. VM desktop acceptance does not
+establish T440p firmware, signing, or device acceptance.

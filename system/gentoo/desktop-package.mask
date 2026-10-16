@@ -1,0 +1,3 @@
+# Keep browser and Rust selection on source ebuilds; binary variants are not accepted.
+www-client/firefox-bin
+dev-lang/rust-bin
