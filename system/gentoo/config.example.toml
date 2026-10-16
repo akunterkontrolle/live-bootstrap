@@ -1,0 +1,72 @@
+# Copy and edit; omitted settings retain these defaults. No secrets belong here.
+# Mode comes from --mode now, and rootfs.py --qemu/--bare-metal in batch 14.
+[build]
+source_jobs = 12
+
+[portage]
+jobs = 2
+load_average = 12
+make_jobs = 12
+
+[system]
+username = "gentoo"
+hostname = "gentoo"
+fqdn = "gentoo.local"
+locale = "en_US.UTF-8"
+keymap = "us"
+timezone = "Europe/Berlin"
+allow_weak_passwords = false
+volume_group = "gentoo"
+
+[layout]
+root_gib = 200
+swap_gib = 90
+reserve_gib = 100
+home_min_gib = 20
+
+[workspace]
+label = "GENTOO_BUILD"
+# Optional existing filesystem UUID. Empty means discover exactly one label.
+uuid = ""
+network_interface = "eth0"
+
+# Image capacities only; CPU/RAM and original bootstrap target size stay with
+# rootfs.py. Root grows to fit layout plus metadata allowance when necessary.
+[images]
+workspace_gib = 128
+scratch_gib = 128
+root_gib = 500
+extra_gib = 128
+
+# Required only in hardware mode. Observe these IDs on the actual machine.
+# boot is the original bootstrap medium; extra initially holds the workspace.
+[hardware_disks]
+root_by_id = ""
+root_serial = ""
+root_wwn = ""
+root_model = ""
+root_min_bytes = 1900000000000
+root_max_bytes = 2100000000000
+boot_by_id = ""
+boot_serial = ""
+boot_min_bytes = 60000000000
+boot_max_bytes = 75000000000
+extra_by_id = ""
+extra_serial = ""
+extra_wwn = ""
+extra_model = ""
+extra_min_bytes = 950000000000
+extra_max_bytes = 1100000000000
+
+# Optional policy inputs, relative to this TOML. Later batches add defaults.
+# Empty paths select those future defaults; custom files are copied now.
+[packages]
+base = ""
+desktop = ""
+base_use = ""
+base_license = ""
+base_keywords = ""
+desktop_use = ""
+desktop_keywords = ""
+desktop_mask = ""
+firmware = ""
