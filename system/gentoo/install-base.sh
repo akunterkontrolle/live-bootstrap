@@ -77,6 +77,7 @@ resolve_disks() {
     else
         ROOT_DISK=$GENTOO_HARDWARE_DISKS_ROOT_BY_ID; BOOT_DISK=$GENTOO_HARDWARE_DISKS_BOOT_BY_ID; EXTRA_DISK=$GENTOO_HARDWARE_DISKS_EXTRA_BY_ID
         ROOT_SERIAL=$GENTOO_HARDWARE_DISKS_ROOT_SERIAL; BOOT_SERIAL=$GENTOO_HARDWARE_DISKS_BOOT_SERIAL; EXTRA_SERIAL=$GENTOO_HARDWARE_DISKS_EXTRA_SERIAL
+        ROOT_BY_ID=$GENTOO_HARDWARE_DISKS_ROOT_BY_ID
         ROOT_MIN=$GENTOO_HARDWARE_DISKS_ROOT_MIN_BYTES; ROOT_MAX=$GENTOO_HARDWARE_DISKS_ROOT_MAX_BYTES
         BOOT_MIN=$GENTOO_HARDWARE_DISKS_BOOT_MIN_BYTES; BOOT_MAX=$GENTOO_HARDWARE_DISKS_BOOT_MAX_BYTES
         EXTRA_MIN=$GENTOO_HARDWARE_DISKS_EXTRA_MIN_BYTES; EXTRA_MAX=$GENTOO_HARDWARE_DISKS_EXTRA_MAX_BYTES
@@ -84,6 +85,11 @@ resolve_disks() {
     ROOT_REAL=$(check_disk "$ROOT_DISK" "$ROOT_SERIAL" "$ROOT_MIN" "$ROOT_MAX" "$GENTOO_HARDWARE_DISKS_ROOT_WWN" "$GENTOO_HARDWARE_DISKS_ROOT_MODEL")
     BOOT_REAL=$(check_disk "$BOOT_DISK" "$BOOT_SERIAL" "$BOOT_MIN" "$BOOT_MAX" "" "")
     EXTRA_REAL=$(check_disk "$EXTRA_DISK" "$EXTRA_SERIAL" "$EXTRA_MIN" "$EXTRA_MAX" "$GENTOO_HARDWARE_DISKS_EXTRA_WWN" "$GENTOO_HARDWARE_DISKS_EXTRA_MODEL")
+    EXTRA_BYTES=$(lsblk -bndro SIZE "$EXTRA_REAL" | tr -d '[:space:]')
+    EXTRA_WWN_OBSERVED=$(lsblk -dnro WWN "$EXTRA_REAL" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
+    EXTRA_MODEL_OBSERVED=$(lsblk -dnro MODEL "$EXTRA_REAL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [ "$GENTOO_MODE" = hardware ]; then EXTRA_BY_ID=$GENTOO_HARDWARE_DISKS_EXTRA_BY_ID; else EXTRA_BY_ID=; fi
+    if [ "$GENTOO_MODE" = hardware ]; then ROOT_BY_ID=$GENTOO_HARDWARE_DISKS_ROOT_BY_ID; else ROOT_BY_ID=; fi
     [ "$ROOT_REAL" != "$BOOT_REAL" ] && [ "$ROOT_REAL" != "$EXTRA_REAL" ] && [ "$BOOT_REAL" != "$EXTRA_REAL" ] || fail 'root, boot and extra disks must differ.'
     source=$(findmnt -rn -T /build -o SOURCE); real=$(readlink -f "$source"); [ -b "$real" ] || fail 'cannot identify workspace source.'
     while IFS= read -r child; do [ -z "$child" ] || [ "$(readlink -f "$child")" != "$ROOT_REAL" ] || fail 'root target backs workspace.'; done < <(lsblk -s -nrpo NAME "$real")
@@ -271,6 +277,9 @@ copy_continuation_bundle() {
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/signed-generation.py"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/signed-generation.py "$TARGET_ROOT/usr/local/sbin/ms1504-signed-generation"
     install -m 0644 "$SCRIPT_DIR/signed-generation.example.toml" "$TARGET_ROOT/usr/share/ms1504-signed-generation.example.toml"
+    install -m 0644 "$SCRIPT_DIR/setup-extra.sh" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
+    chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
+    ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh "$TARGET_ROOT/usr/local/sbin/ms1504-extra"
 }
 install_root() {
     local root_lv="/dev/$VG/root" home_lv="/dev/$VG/home" swap_lv="/dev/$VG/swap"
@@ -338,10 +347,14 @@ install_root() {
     mkdir -p "$TARGET_ROOT/etc/kernel" "$TARGET_ROOT/etc/sudoers.d" "$TARGET_ROOT/home/.ms1504-hibernate"
     chown 0:0 "$TARGET_ROOT/home/.ms1504-hibernate"
     chmod 0700 "$TARGET_ROOT/home/.ms1504-hibernate"
-    printf 'profile=%s\nvolume_group=%s\nroot_lv=root\nhome_lv=home\nswap_lv=swap\nreserve_gib=%s\nserial=%s\nwwn=%s\nmodel=%s\nsize=%s\n' \
-        "$GENTOO_MODE" "$VG" "$RESERVE_GIB" "$ROOT_SERIAL" "$ROOT_WWN_OBSERVED" "$ROOT_MODEL_OBSERVED" "$ROOT_BYTES" \
+    printf 'profile=%s\nvolume_group=%s\nroot_lv=root\nhome_lv=home\nswap_lv=swap\nreserve_gib=%s\nby_id=%s\nserial=%s\nwwn=%s\nmodel=%s\nsize=%s\n' \
+        "$GENTOO_MODE" "$VG" "$RESERVE_GIB" "$ROOT_BY_ID" "$ROOT_SERIAL" "$ROOT_WWN_OBSERVED" "$ROOT_MODEL_OBSERVED" "$ROOT_BYTES" \
         > "$TARGET_ROOT/etc/ms1504-root-identity"
     chmod 0644 "$TARGET_ROOT/etc/ms1504-root-identity"
+    printf 'profile=%s\nvolume_group=%s\nroot_lv=root\nhome_lv=home\nby_id=%s\nserial=%s\nwwn=%s\nmodel=%s\nsize=%s\nworkspace_uuid=%s\nworkspace_label=%s\n' \
+        "$GENTOO_MODE" "$VG" "$EXTRA_BY_ID" "$EXTRA_SERIAL" "$EXTRA_WWN_OBSERVED" "$EXTRA_MODEL_OBSERVED" "$EXTRA_BYTES" \
+        "$GENTOO_DISCOVERED_WORKSPACE_UUID" "$GENTOO_WORKSPACE_LABEL" > "$TARGET_ROOT/etc/ms1504-extra-identity"
+    chmod 0644 "$TARGET_ROOT/etc/ms1504-extra-identity"
     printf '%s\n' "$BASE_GENERATION" > "$TARGET_ROOT/etc/ms1504-generation"
     chmod 0644 "$TARGET_ROOT/etc/ms1504-generation"
     printf 'rd.luks.uuid=luks-%s rd.lvm.lv=%s/root rd.lvm.lv=%s/home rd.lvm.lv=%s/swap root=/dev/mapper/%s-root resume=/dev/mapper/%s-swap ms1504.generation=%s ro loglevel=4 %s\n' \

@@ -7,6 +7,7 @@ app-misc/mc
 media-sound/alsa-utils
 net-misc/dhcpcd
 net-misc/networkmanager
+net-misc/rsync
 net-wireless/iw
 net-wireless/wpa_supplicant
 =sys-kernel/linux-firmware-20260916

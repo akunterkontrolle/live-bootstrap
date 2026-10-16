@@ -19,6 +19,7 @@ BUNDLE_FILES = (
     'harden-libreboot-payload.sh', 'firmware-build-receipt.sh', 'firmware-flash.sh',
     'dracut-ms1504-resume-guard/module-setup.sh',
     'dracut-ms1504-resume-guard/check-generation.sh',
+    'setup-extra.sh',
     'lib/sources.sh', 'stages/00-inputs.sh',
     'lib/toolchain.sh', 'stages/10-host-preflight.sh',
     'stages/11-binutils-elf.sh', 'stages/12-gcc-elf.sh',
