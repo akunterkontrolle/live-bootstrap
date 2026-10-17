@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import shutil
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -166,16 +167,32 @@ gentoo_run_stage 10-test "$fingerprint" action verify''')
         self.assertTrue((self.directory / 'work/state/10-test.done').is_file())
 
     def test_process_lock_released_after_kill(self):
-        script = self.helpers('common') + 'WORK_ROOT="$PWD"\ngentoo_lock\necho ready\nread -r wait_for_input'
+        fake_bin = self.directory / 'fake-bin'
+        fake_bin.mkdir()
+        (fake_bin / 'perl').symlink_to(shutil.which('perl'))
+        (fake_bin / 'awk').symlink_to(shutil.which('awk'))
+        script = self.helpers('common') + f'PATH="$PWD/fake-bin"\nmountpoint -q /proc\nWORK_ROOT="$PWD"\ngentoo_lock\necho ready\nread -r wait_for_input'
         process = subprocess.Popen(['bash', '-c', script], cwd=self.directory,
                                    text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE)
         try:
             self.assertEqual(process.stdout.readline().strip(), 'ready')
-            self.shell(self.helpers('common') + 'WORK_ROOT="$PWD"\ngentoo_lock', success=False)
+            self.shell(self.helpers('common') + f'PATH="$PWD/fake-bin"\nWORK_ROOT="$PWD"\ngentoo_lock', success=False)
             process.kill()
             process.wait(timeout=5)
-            self.shell(self.helpers('common') + 'WORK_ROOT="$PWD"\ngentoo_lock')
+            # The Perl guardian releases its kernel lock when the killed shell
+            # closes the coprocess pipe.
+            for _ in range(50):
+                result = subprocess.run(
+                    ['bash', '-c', 'set -Eeuo pipefail\n' + self.helpers('common') +
+                     'PATH="$PWD/fake-bin"\nWORK_ROOT="$PWD"\ngentoo_lock'],
+                    cwd=self.directory, text=True, capture_output=True)
+                if result.returncode == 0:
+                    break
+                import time
+                time.sleep(0.02)
+            else:
+                self.fail('Perl process-bound lock remained held after its parent died')
         finally:
             if process.poll() is None:
                 process.kill()

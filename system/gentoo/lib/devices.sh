@@ -18,6 +18,29 @@ gentoo_disk_serial() {
     return 1
 }
 
+gentoo_disk_attribute() {
+    local field=$1 disk=$2 sysnode value
+    if command -v lsblk >/dev/null 2>&1; then
+        lsblk -dnro "$field" "$disk" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+        return
+    fi
+    # The pinned live-bootstrap util-linux omits lsblk. The first hardware
+    # workspace check only needs these two identity fields, which sysfs exports.
+    sysnode="/sys/class/block/${disk##*/}"
+    case "$field" in
+        MODEL) value=$(cat "$sysnode/device/model" 2>/dev/null) || return 1 ;;
+        WWN)
+            value=$(cat "$sysnode/wwid" 2>/dev/null) ||
+                value=$(cat "$sysnode/device/wwid" 2>/dev/null) || return 1
+            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[Nn][Aa][Aa]\.//')
+            case "$value" in 0x*|0X*) value=${value:2} ;; esac
+            value="0x$value"
+            ;;
+        *) return 1 ;;
+    esac
+    printf '%s\n' "$value"
+}
+
 gentoo_check_hardware_workspace() {
     local device=$1 parent disk expected size actual field variable
     parent=$(readlink -f "/sys/class/block/${device##*/}")
@@ -33,7 +56,11 @@ gentoo_check_hardware_workspace() {
         variable=GENTOO_HARDWARE_DISKS_EXTRA_$field
         expected=${!variable}
         [ -n "$expected" ] || continue
-        actual=$(lsblk -dnro "$field" "$disk" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        actual=$(gentoo_disk_attribute "$field" "$disk") || gentoo_die "cannot read workspace disk $field"
+        if [ "$field" = WWN ]; then
+            actual=$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
+            expected=$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
+        fi
         [ "$actual" = "$expected" ] || gentoo_die "workspace disk $field mismatch"
     done
 }

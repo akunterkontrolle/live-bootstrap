@@ -12,9 +12,14 @@ TCG and any CPU model, display and networking options; the helper records them.
 Sparse images need real host free space as their contents grow.
 
 Guest commands run as root in the completed live-bootstrap Linux environment.
-They need Bash, GNU coreutils/findutils, awk, sed and util-linux, including
-`flock`, `mountpoint`, `blkid` and `mount`. Hardware identification also needs
-`lsblk`, `blockdev`, `/sys` and persistent `/dev/disk/by-id` links. Source builds
+They need Bash, GNU coreutils/findutils, awk, sed, Perl and the pinned util-linux
+`blkid` and `mount`. That util-linux is 2.19.1 and intentionally omits `flock`
+and `lsblk`; continuation locking therefore uses Perl's kernel `flock(2)` with
+a pipe-held process lifetime, and early mount checks read `/proc/mounts`.
+Hardware workspace identity checks use sysfs because `lsblk` is absent there;
+the later installed-system storage commands run with Gentoo's own util-linux.
+Hardware identification also needs `blockdev`, `/sys` and persistent
+`/dev/disk/by-id` links. Source builds
 use the original source-built GCC/G++, GMP/MPFR/MPC/zlib static libraries,
 OpenSSL and zlib development headers/libraries for Python's `ssl` and `zlib`
 modules, make, tar/decompressors, wget, Bison, Flex, Perl, Python and autotools. No guest

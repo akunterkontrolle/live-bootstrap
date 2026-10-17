@@ -15,4 +15,5 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
 WORK_ROOT=$(CDPATH= cd -- "$HERE/../.." && pwd)
 inputs=$(basename "$HERE")
 [[ "$inputs" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid durable handoff path.' >&2; exit 1; }
+. "$WORK_ROOT/inputs/$inputs/lib/common.sh"
 exec bash "$WORK_ROOT/inputs/$inputs/gentoo.sh" build
