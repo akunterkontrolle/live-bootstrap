@@ -39,7 +39,7 @@ WRAPPER
     gcc_linux_build_libgcc
 }
 gcc_linux_build_libgcc() {
-    local wrapper="$GCC_C_BUILD/cc-for-target" target_makefile patched=0
+    local wrapper="$GCC_C_BUILD/cc-for-target" target_makefile bound=0
     cd "$GCC_C_BUILD"
     make "CC_FOR_TARGET=$wrapper" configure-target-libgcc
     # Top-level CC_FOR_TARGET does not replace every generated recursive CC.
@@ -51,9 +51,19 @@ gcc_linux_build_libgcc() {
                 ' "$target_makefile" > "$target_makefile.tmp"
             mv "$target_makefile.tmp" "$target_makefile"
         fi
-        if grep -Fxq "CC = $wrapper" "$target_makefile"; then patched=$((patched + 1)); fi
+        # configure-target-libgcc may append ABI-specific -B and -m32 flags
+        # directly to CC. Validate the executable token, not an exact line
+        # match, so those required recursive-make arguments remain intact.
+        if awk -v wrapper="$wrapper" '
+            /^CC[[:space:]]*=/ {
+                sub(/^CC[[:space:]]*=[[:space:]]*/, "")
+                if ($0 == wrapper || index($0, wrapper " ") == 1 ||
+                    index($0, wrapper "\t") == 1) found=1
+            }
+            END {exit !found}
+        ' "$target_makefile"; then bound=$((bound + 1)); fi
     done < <(find "$GCC_C_BUILD/$TARGET/libgcc" -type f -name Makefile -print)
-    [ "$patched" -gt 0 ] || gentoo_die 'no recursive libgcc rule uses the ABI-aware compiler'
+    [ "$bound" -gt 0 ] || gentoo_die 'no recursive libgcc rule uses the ABI-aware compiler'
     make -j"$JOBS" "CC=$wrapper" "CC_FOR_TARGET=$wrapper" all-target-libgcc
     make "CC=$wrapper" "CC_FOR_TARGET=$wrapper" install-target-libgcc
 }
