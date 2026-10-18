@@ -16,6 +16,8 @@ They need Bash, GNU coreutils/findutils, awk, sed, Perl and the pinned util-linu
 `blkid` and `mount`. That util-linux is 2.19.1 and intentionally omits `flock`
 and `lsblk`; continuation locking therefore uses Perl's kernel `flock(2)` with
 a pipe-held process lifetime, and early mount checks read `/proc/mounts`.
+The post-reboot handoff loads this mount-check fallback before probing `/proc`
+and `/sys`.
 Hardware workspace identity checks use sysfs because `lsblk` is absent there;
 the later installed-system storage commands run with Gentoo's own util-linux.
 Hardware identification also needs `blockdev`, `/sys` and persistent
