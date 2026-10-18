@@ -13,10 +13,16 @@ WORK_ROOT=$(CDPATH= cd -- "$HERE/../.." && pwd)
 inputs=$(basename "$HERE")
 [[ "$inputs" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid durable handoff path.' >&2; exit 1; }
 . "$WORK_ROOT/inputs/$inputs/lib/common.sh"
-mkdir -p /proc /sys /dev/pts /dev/shm
-mountpoint -q /proc || mount -t proc proc /proc
-mountpoint -q /sys || mount -t sysfs sysfs /sys
-mountpoint -q /dev/pts || mount -t devpts devpts /dev/pts
-mountpoint -q /dev/shm || mount -t tmpfs tmpfs /dev/shm
+. "$WORK_ROOT/inputs/$inputs/lib/mounts.sh"
+gentoo_prepare_virtual_filesystems
+# init=/bin/bash does not run the original bootstrap's get_network step.
+# Reuse its source-built DHCP client and installed resolver hooks, waiting for
+# an IPv4 lease before continuation stages can attempt verified downloads.
+export PATH="${PATH:-/usr/bin:/bin}:/usr/sbin:/sbin"
+command -v dhcpcd >/dev/null 2>&1 || gentoo_die 'missing bootstrap prerequisite: dhcpcd'
+mkdir -p /var/run/dhcpcd /var/db/dhcpcd
+printf 'Restoring bootstrap networking with dhcpcd (IPv4, up to 60 seconds).\n'
+dhcpcd --waitip=4 --timeout 60 ||
+    gentoo_die 'DHCP did not obtain an IPv4 lease; check the network link and retry this resume script'
 # This script is copied into handoff/INPUT_DIGEST, independent of current-inputs.
 exec bash "$WORK_ROOT/inputs/$inputs/gentoo.sh" build

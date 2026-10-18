@@ -123,3 +123,10 @@ portage_emerge() {
     portage_manifest_guard_check || gentoo_die 'Portage operation changed pinned repository Manifests'
     return "$result"
 }
+
+# Uninstalled source snapshots report HEAD without Git metadata. Check the
+# pinned Meson project version, imported tree and matching banner together.
+portage_source_version_verify() {
+    local source=$1 output=$2 python=$3
+    PYTHONPATH="$source/lib" "$python" "$SCRIPT_DIR/probes/portage-version.py" "$source" "$output"
+}

@@ -5,15 +5,11 @@
 . "$SCRIPT_DIR/lib/native-tools.sh"
 
 native_runtime_cleanup() {
-    local root point points
+    local root
     for root in "$NATIVE_ROOT/dev" "$NATIVE_ROOT/sys" "$NATIVE_ROOT/proc" \
         "$NATIVE_ROOT/mnt/work/locks" "$NATIVE_ROOT/mnt/work/state" \
         "$NATIVE_ROOT/mnt/work/build/native" "$NATIVE_ROOT/mnt/work/sources"; do
-        points=$(awk -v root="$root" '$2 == root || index($2, root "/") == 1 {print $2}' \
-            /proc/mounts | sort -r)
-        while IFS= read -r point; do
-            [ -z "$point" ] || umount "$point"
-        done <<< "$points"
+        gentoo_unmount_tree "$root" || return 1
     done
 }
 native_runtime_action() {
@@ -66,14 +62,14 @@ native_runtime_verify() {
     for binary in perl python3.12; do
         [ -x "$NATIVE_ROOT/usr/bin/$binary" ] || return 1
         native_verify_elf "$NATIVE_ROOT/usr/bin/$binary" ELF64 || return 1
-        chroot "$NATIVE_ROOT" "/usr/bin/$binary" --version >/dev/null 2>&1 || return 1
+        chroot "$NATIVE_ROOT" /usr/bin/env LD_LIBRARY_PATH=/usr/lib/perl5/5.42.2/x86_64-linux/CORE "/usr/bin/$binary" --version >/dev/null 2>&1 || return 1
     done
     for package in zlib bzip2 libffi perl openssl python; do
         [ -s "$WORK_ROOT/state/70-$package.done" ] || return 1
         case "$package" in
             zlib) output="$NATIVE_ROOT/usr/lib64/libz.so.1.3.2" ;;
             bzip2) output="$NATIVE_ROOT/usr/lib64/libbz2.so.1.0.8" ;;
-            libffi) output="$NATIVE_ROOT/usr/lib64/libffi.so.8.1.2" ;;
+            libffi) output="$NATIVE_ROOT/usr/lib64/libffi.so.8" ;;
             perl) output="$NATIVE_ROOT/usr/bin/perl" ;;
             openssl) output="$NATIVE_ROOT/usr/lib64/libssl.so.3" ;;
             python) output="$NATIVE_ROOT/usr/bin/python3.12" ;;
@@ -83,11 +79,11 @@ native_runtime_verify() {
     done
     chroot "$NATIVE_ROOT" /usr/bin/python3.12 -c \
         'import _ctypes, bz2, ctypes, lzma, ssl, zlib; callback=ctypes.CFUNCTYPE(ctypes.c_int)(lambda: 7); assert callback() == 7' || return 1
-    chroot "$NATIVE_ROOT" /usr/bin/perl -MConfig -MExtUtils::MakeMaker -MDigest::SHA -MIPC::Cmd \
+    chroot "$NATIVE_ROOT" /usr/bin/env LD_LIBRARY_PATH=/usr/lib/perl5/5.42.2/x86_64-linux/CORE /usr/bin/perl -MConfig -MExtUtils::MakeMaker -MDigest::SHA -MIPC::Cmd \
         -e 'print $] . "\n"' | grep -Fxq '5.042002' || return 1
 }
 fingerprint=$(gentoo_fingerprint stages/70-native-runtimes.sh stages/native-runtime-build.sh \
-    lib/native.sh lib/native-tools.sh lib/sources.sh lib/state.sh \
+    lib/native.sh lib/native-tools.sh lib/mounts.sh lib/sources.sh lib/state.sh \
     sources/zlib.lock sources/bzip2.lock sources/libffi.lock sources/perl.lock \
     sources/openssl.lock sources/python.lock \
     "$WORK_ROOT/state/63-native-tool-floor.done" "$WORK_ROOT/state/52-portage-host.done")

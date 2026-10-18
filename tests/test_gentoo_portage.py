@@ -240,7 +240,8 @@ portage_emerge --pretend @world
         portage = (GENTOO / 'stages/71-native-portage.sh').read_text()
         for setting in ('GENTOO_PORTAGE_JOBS', 'GENTOO_PORTAGE_LOAD_AVERAGE', 'GENTOO_PORTAGE_MAKE_JOBS'):
             self.assertIn(setting, portage)
-        self.assertIn('Portage 3.0.82.2', portage)
+        self.assertIn('portage_source_version_verify', portage)
+        self.assertIn('probes/portage-version.py', portage)
         self.assertIn('find_binary("bzip2")', portage)
 
 

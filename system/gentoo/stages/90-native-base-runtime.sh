@@ -4,6 +4,7 @@
 [ "${GENTOO_MODERN_KERNEL_READY:-0}" = 1 ] || gentoo_die 'base runtime requires the modern-kernel handoff'
 . "$SCRIPT_DIR/lib/native-gentoo-system.sh"
 . "$SCRIPT_DIR/lib/manifests.sh"
+. "$SCRIPT_DIR/lib/mounts.sh"
 
 BASE_PACKAGES_INPUT=${GENTOO_PACKAGES_BASE:-policy/defaults/base-packages.list}
 BASE_USE_INPUT=${GENTOO_PACKAGES_BASE_USE:-policy/defaults/base-package.use}
@@ -31,7 +32,7 @@ base_runtime_action() (
     mapfile -t atoms < <(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$SCRIPT_DIR/$BASE_PACKAGES_INPUT")
     [ "${#atoms[@]}" -gt 0 ] || gentoo_die 'runtime package selection is empty'
     for mandatory in app-admin/sudo app-admin/sysklogd app-crypt/gnupg app-misc/mc net-misc/dhcpcd \
-        net-misc/networkmanager sys-fs/cryptsetup sys-fs/e2fsprogs sys-fs/lvm2 sys-kernel/dracut \
+        net-misc/networkmanager net-misc/rsync sys-apps/util-linux sys-fs/cryptsetup sys-fs/e2fsprogs sys-fs/lvm2 sys-kernel/dracut \
         sys-apps/systemd-utils\[udev\]; do
         printf '%s\n' "${atoms[@]}" | grep -Fxq "$mandatory" || gentoo_die "required runtime atom absent: $mandatory"
     done
@@ -80,7 +81,7 @@ base_runtime_action() (
     for point in "$NATIVE_ROOT/proc" "$NATIVE_ROOT/sys" "$NATIVE_ROOT/dev" "$NATIVE_ROOT/gentoo-scratch"; do
         mountpoint -q "$point" && gentoo_die "unexpected existing runtime chroot mount: $point"
     done
-    trap 'for p in "$NATIVE_ROOT/dev" "$NATIVE_ROOT/sys" "$NATIVE_ROOT/proc" "$NATIVE_ROOT/gentoo-scratch"; do mountpoint -q "$p" && umount -R "$p"; done' EXIT
+    trap 'for p in "$NATIVE_ROOT/dev" "$NATIVE_ROOT/sys" "$NATIVE_ROOT/proc" "$NATIVE_ROOT/gentoo-scratch"; do gentoo_unmount_tree "$p"; done' EXIT
     mount -t proc proc "$NATIVE_ROOT/proc"
     mount --rbind /sys "$NATIVE_ROOT/sys"; mount --make-rslave "$NATIVE_ROOT/sys"
     mount --rbind /dev "$NATIVE_ROOT/dev"; mount --make-rslave "$NATIVE_ROOT/dev"
@@ -116,7 +117,7 @@ base_runtime_action() (
     sync "$NATIVE_ROOT/etc/portage"
     trap - EXIT
     for p in "$NATIVE_ROOT/dev" "$NATIVE_ROOT/sys" "$NATIVE_ROOT/proc" "$NATIVE_ROOT/gentoo-scratch"; do
-        mountpoint -q "$p" && umount -R "$p"
+        gentoo_unmount_tree "$p"
     done
 )
 
@@ -143,7 +144,7 @@ base_runtime_verify() (
         grep -Fq " /lib/firmware/$firmware " "$vdb/CONTENTS" || return 1
     done < <(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$savedconfig")
     for command in cryptsetup lvm openrc NetworkManager nmcli wpa_supplicant dhcpcd sudo \
-        gdisk e2fsck smartctl lspci lsusb loadkeys mc gpg dracut; do
+        gdisk e2fsck smartctl lspci lsusb loadkeys mc gpg dracut rsync lsblk findmnt wipefs; do
         [ -x "$root/usr/bin/$command" ] || [ -x "$root/usr/sbin/$command" ] ||
             [ -x "$root/bin/$command" ] || [ -x "$root/sbin/$command" ] || return 1
     done
@@ -152,7 +153,7 @@ base_runtime_verify() (
     grep -qw argon2 "$root"/var/db/pkg/sys-fs/cryptsetup-*/USE || return 1
     grep -qw lvm "$root"/var/db/pkg/sys-fs/lvm2-*/USE || return 1
     for point in "$root/proc" "$root/sys" "$root/dev"; do mountpoint -q "$point" && return 1; done
-    trap 'for p in "$root/dev" "$root/sys" "$root/proc"; do mountpoint -q "$p" && umount -R "$p"; done' EXIT
+    trap 'for p in "$root/dev" "$root/sys" "$root/proc"; do gentoo_unmount_tree "$p"; done' EXIT
     mount -t proc proc "$root/proc"
     mount --rbind /sys "$root/sys"; mount --make-rslave "$root/sys"
     mount --rbind /dev "$root/dev"; mount --make-rslave "$root/dev"
@@ -167,10 +168,15 @@ base_runtime_verify() (
     chroot "$root" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin wpa_supplicant -v >/dev/null 2>&1 || return 1
     chroot "$root" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin dhcpcd --version >/dev/null 2>&1 || return 1
     chroot "$root" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin sudo -V >/dev/null 2>&1 || return 1
+    mkdir -p "$root/tmp/base-rsync-from" "$root/tmp/base-rsync-to"
+    printf 'root-copy probe\n' > "$root/tmp/base-rsync-from/probe"
+    chroot "$root" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        rsync -aHAX --numeric-ids /tmp/base-rsync-from/ /tmp/base-rsync-to/ || return 1
+    cmp "$root/tmp/base-rsync-from/probe" "$root/tmp/base-rsync-to/probe" || return 1
 )
 
 base_runtime_fingerprint=$(gentoo_fingerprint stages/90-native-base-runtime.sh \
-    lib/native-gentoo-system.sh lib/manifests.sh \
+    lib/native-gentoo-system.sh lib/manifests.sh lib/mounts.sh \
     "$BASE_PACKAGES_INPUT" "$BASE_USE_INPUT" "$BASE_LICENSE_INPUT" "$BASE_KEYWORDS_INPUT" \
     "$FIRMWARE_INPUT" policy/90-encrypted-base-dracut.conf \
     audit-resolved-sources.py config.inputs.sh \

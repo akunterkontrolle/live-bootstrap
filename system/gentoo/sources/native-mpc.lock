@@ -1,0 +1,2 @@
+# Native GCC in-tree prerequisite; same archive as the original bootstrap.
+mpc-1.2.1.tar.gz|https://mirrors.kernel.org/gnu/mpc/mpc-1.2.1.tar.gz|sha512=3279f813ab37f47fdcc800e4ac5f306417d07f539593ca715876e43e04896e1d5bceccfb288ef2908a3f24b760747d0dbd0392a24b9b341bc3e12082e5c836ee

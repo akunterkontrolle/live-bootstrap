@@ -94,7 +94,7 @@ native_portage_action() {
     chroot "$NATIVE_ROOT" /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin LANG=C LC_ALL=C \
         PYTHONPATH=/usr/lib/portage/lib /usr/bin/python3.12 /usr/lib/portage/bin/emerge --version |
         tee "$WORK_ROOT/state/71-native-emerge-version.txt"
-    grep -Fq 'Portage 3.0.82.2' "$WORK_ROOT/state/71-native-emerge-version.txt" || gentoo_die 'native Portage version check failed'
+    portage_source_version_verify "$PORTAGE_SOURCE" "$WORK_ROOT/state/71-native-emerge-version.txt" "$HOST_PREFIX/bin/python3.12" || gentoo_die 'native Portage version check failed'
     chroot "$NATIVE_ROOT" /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin LANG=C LC_ALL=C \
         PYTHONPATH=/usr/lib/portage/lib /usr/bin/python3.12 -c \
         'import locale; from portage.process import find_binary; assert locale.setlocale(locale.LC_ALL, "") == "C"; assert find_binary("bzip2") == "/usr/bin/bzip2"; print("Portage locale and bzip2 command passed")'
@@ -117,7 +117,7 @@ native_portage_verify() {
     [ -n "$expected_repo" ] && [ -n "$expected_portage" ] || return 1
     [ "$(native_portage_tree_hash "$NATIVE_ROOT/usr/portage")" = "$expected_repo" ] || return 1
     [ "$(native_portage_tree_hash "$NATIVE_ROOT/usr/lib/portage")" = "$expected_portage" ] || return 1
-    grep -Fq 'Portage 3.0.82.2' "$WORK_ROOT/state/71-native-emerge-version.txt" || return 1
+    portage_source_version_verify "$PORTAGE_SOURCE" "$WORK_ROOT/state/71-native-emerge-version.txt" "$HOST_PREFIX/bin/python3.12" || return 1
     grep -Fxq "MAKEOPTS=\"-j$GENTOO_PORTAGE_MAKE_JOBS\"" "$NATIVE_ROOT/etc/portage/make.conf" || return 1
     grep -Fxq "EMERGE_DEFAULT_OPTS=\"--jobs=$GENTOO_PORTAGE_JOBS --load-average=$GENTOO_PORTAGE_LOAD_AVERAGE --usepkg=n --getbinpkg=n --buildpkg=n\"" \
         "$NATIVE_ROOT/etc/portage/make.conf" || return 1
@@ -126,7 +126,8 @@ native_portage_verify() {
     portage_verify_guest_account "$NATIVE_ROOT/etc/group" "$NATIVE_ROOT/etc/passwd" "$NATIVE_ROOT/bin/false" || return 1
     chroot "$NATIVE_ROOT" /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin LANG=C LC_ALL=C \
         PYTHONPATH=/usr/lib/portage/lib /usr/bin/python3.12 /usr/lib/portage/bin/emerge --version 2>&1 |
-        grep -F 'Portage 3.0.82.2' >/dev/null || return 1
+        tee "$WORK_ROOT/state/71-native-emerge-version-check.txt" || return 1
+    portage_source_version_verify "$PORTAGE_SOURCE" "$WORK_ROOT/state/71-native-emerge-version-check.txt" "$HOST_PREFIX/bin/python3.12" || return 1
     chroot "$NATIVE_ROOT" /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin LANG=C LC_ALL=C \
         PYTHONPATH=/usr/lib/portage/lib /usr/bin/python3.12 -c \
         'import locale; from portage.process import find_binary; assert locale.setlocale(locale.LC_ALL, "") == "C"; assert find_binary("bzip2") == "/usr/bin/bzip2"' || return 1
@@ -135,7 +136,7 @@ native_portage_verify() {
 }
 fingerprint=$(gentoo_fingerprint stages/71-native-portage.sh lib/native.sh lib/portage.sh \
     lib/portage-host.sh lib/manifests.sh lib/sources.sh \
-    sources/portage.lock sources/gentoo-repository.lock \
+    probes/portage-version.py sources/portage.lock sources/gentoo-repository.lock \
     "$WORK_ROOT/state/70-native-runtimes.done" "$WORK_ROOT/state/50-gentoo-sources.done")
 # Concurrency is operational policy, not a source/build input. Re-render it on
 # every invocation so changed TOML settings apply without invalidating builds.

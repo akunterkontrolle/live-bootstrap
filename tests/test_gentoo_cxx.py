@@ -95,14 +95,14 @@ cxx_remove_shadow_crt
 printf 'ORIGINAL_NM_FOR_TARGET=""\\n' > "$GCC_CXX_BUILD/gcc/nm"
 cxx_fix_nm
 cxx_fix_nm
-mkdir -p "$GCC_CXX_BUILD/$TARGET/libgcc/32"
-for dir in "$GCC_CXX_BUILD/$TARGET/libgcc" "$GCC_CXX_BUILD/$TARGET/libgcc/32"; do
+mkdir -p "$GCC_CXX_BUILD/$TARGET/libgcc" "$GCC_CXX_BUILD/$TARGET/32/libgcc"
+for dir in "$GCC_CXX_BUILD/$TARGET/libgcc" "$GCC_CXX_BUILD/$TARGET/32/libgcc"; do
     printf 'CC = /build/../gcc/xgcc -B../gcc/\\nOTHER = unchanged\\n' > "$dir/Makefile"
 done
 cxx_bind_libgcc
 cxx_bind_libgcc
-for dir in "$GCC_CXX_BUILD/$TARGET/libgcc" "$GCC_CXX_BUILD/$TARGET/libgcc/32"; do
-    grep -Fx "CC = $GCC_CXX_BUILD/cc-for-target" "$dir/Makefile"
+for dir in "$GCC_CXX_BUILD/$TARGET/libgcc" "$GCC_CXX_BUILD/$TARGET/32/libgcc"; do
+    grep -Fx "CC = $GCC_CXX_BUILD/cc-for-target -B../gcc/" "$dir/Makefile"
     grep -Fx 'OTHER = unchanged' "$dir/Makefile"
 done
 ''')
@@ -155,6 +155,78 @@ b=$(cxx_fingerprint stages/40-gcc-cxx.sh sources/gcc.lock "$WORK_ROOT/state/20-s
 printf changed >> stages/40-gcc-cxx.sh
 c=$(cxx_fingerprint stages/40-gcc-cxx.sh sources/gcc.lock "$WORK_ROOT/state/20-sysroot-links.done")
 [ "$a" != "$c" ]
+''')
+
+    def test_intermediate_headers_select_installed_abi_configuration(self):
+        base = self.directory / 'work/linux-toolchain/include/c++/16.2.0'
+        (base / 'backward').mkdir(parents=True)
+        (base / 'iostream').write_text('// common C++ header\n')
+        for abi, suffix in [(64, 'target'), (32, 'target/32')]:
+            directory = base / suffix / 'bits'
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / 'c++config.h').write_text(f'#define FIXTURE_ABI {abi}\n')
+        driver = self.directory / 'work/linux-toolchain/bin/x86_64-pc-linux-gnu-g++'
+        driver.parent.mkdir()
+        driver.write_text('''#!/bin/sh
+case "$1" in -m64) suffix=target ;; -m32) suffix=target/32 ;; *) exit 2 ;; esac
+printf '#include <...> search starts here:\n %s\n %s/%s\n %s/backward\n /usr/include\nEnd of search list.\n' \
+    ''' + shlex.quote(str(base)) + ' ' + shlex.quote(str(base)) + ' "$suffix" ' + shlex.quote(str(base)) + ' >&2\n')
+        driver.chmod(0o755)
+        self.shell('''
+for abi in 64 32; do
+    cxx_header_flags=()
+    cxx_runtime_headers "$abi"
+    printf '%s\n' "${cxx_header_flags[@]}" > "headers-$abi"
+done
+''')
+        for abi, suffix in [(64, 'target'), (32, 'target/32')]:
+            self.assertEqual((self.directory / f'headers-{abi}').read_text().splitlines(),
+                             ['-nostdinc++', '-isystem', str(base), '-isystem', str(base / suffix),
+                              '-isystem', str(base / 'backward')])
+        (base / 'target/32/bits/c++config.h').unlink()
+        self.shell('cxx_header_flags=(); cxx_runtime_headers 32', success=False)
+
+    def test_real_intermediate_compiler_with_disabled_default_cxx_includes(self):
+        compiler = shutil.which('g++')
+        if not compiler:
+            self.skipTest('native C++ compiler unavailable')
+        query = subprocess.run([compiler, '-E', '-x', 'c++', '-v', '-'], input='',
+                               text=True, capture_output=True, check=True)
+        directories = []
+        inside = False
+        for line in query.stderr.splitlines():
+            if line == '#include <...> search starts here:':
+                inside = True
+            elif line == 'End of search list.':
+                inside = False
+            elif inside:
+                directories.append(Path(line.strip()))
+        common = next(p for p in directories if (p / 'iostream').is_file())
+        config = next(p for p in directories if (p / 'bits/c++config.h').is_file())
+        prefix = self.directory / 'work/linux-toolchain'
+        copied_common = prefix / 'include/c++/fixture'
+        copied_config = prefix / 'include/target-c++-config'
+        shutil.copytree(common, copied_common)
+        shutil.copytree(config, copied_config)
+        flags = ['-nostdinc++', '-isystem', str(copied_common), '-isystem', str(copied_config)]
+        if (copied_common / 'backward').is_dir():
+            flags += ['-isystem', str(copied_common / 'backward')]
+        driver = prefix / 'bin/x86_64-pc-linux-gnu-g++'
+        driver.parent.mkdir(parents=True)
+        driver.write_text('#!/bin/sh\nexec ' + ' '.join(shlex.quote(a) for a in [compiler] + flags) + ' "$@"\n')
+        driver.chmod(0o755)
+        intermediate = self.directory / 'intermediate-cxx'
+        intermediate.write_text('#!/bin/sh\nexec ' + shlex.quote(compiler) + ' -nostdinc++ "$@"\n')
+        intermediate.chmod(0o755)
+        result = subprocess.run([str(intermediate), str(GENTOO / 'probes/runtime.cc'),
+                                 '-o', str(self.directory / 'without-headers')], text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('iostream', result.stderr)
+        self.shell('''
+cxx_header_flags=()
+cxx_runtime_headers 64
+"$PWD/intermediate-cxx" -m64 "${cxx_header_flags[@]}" -pthread "$SCRIPT_DIR/probes/runtime.cc" -o "$PWD/with-headers"
+[ "$("$PWD/with-headers")" = 'gentoo C++ runtime ok' ]
 ''')
 
     def native_runtime(self):

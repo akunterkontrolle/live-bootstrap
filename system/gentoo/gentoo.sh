@@ -3,6 +3,13 @@
 set -Eeuo pipefail
 umask 077
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
+# init=/bin/bash may have serial file descriptors but no controlling terminal.
+# Run the driver in a separate foreground session so Ctrl+C and /dev/tty work.
+if [ "${GENTOO_CONSOLE_SESSION:-0}" != 1 ]; then
+    if [ "$$" -eq 1 ] || { [ -t 0 ] && ! ( : < /dev/tty ) 2>/dev/null; }; then
+        exec python3 "$SCRIPT_DIR/console-session.py" bash "$SCRIPT_DIR/gentoo.sh" "$@"
+    fi
+fi
 . "$SCRIPT_DIR/lib/common.sh"
 case "${1:-build}" in
     build|status) command=${1:-build} ;;
@@ -14,6 +21,8 @@ esac
 [ "$(id -u)" = 0 ] || gentoo_die 'run in the bootstrap guest as root'
 [ ! -d /run/gentoo-shutdown-in-progress ] || gentoo_die 'shutdown is in progress'
 gentoo_verify_bundle "$SCRIPT_DIR"
+. "$SCRIPT_DIR/lib/mounts.sh"
+gentoo_prepare_virtual_filesystems
 . "$SCRIPT_DIR/config.sh"
 . "$SCRIPT_DIR/lib/devices.sh"
 gentoo_mount_workspace
@@ -52,6 +61,12 @@ finish() {
     exit "$result"
 }
 trap finish EXIT
+# Run stages in a child shell. If a stage exits inside a redirected function
+# or block, Bash retains saved copies of the log pipe until that shell exits.
+# The parent must wait for that shell to close its descriptors before asking
+# tee to finish; otherwise the EXIT trap can deadlock waiting for pipe EOF.
+(
+trap - EXIT
 printf 'Starting Gentoo inputs milestone: mode=%s workspace=%s\n' "$GENTOO_MODE" "$GENTOO_DISCOVERED_WORKSPACE_UUID"
 gentoo_persist_bundle "$SCRIPT_DIR"
 # Execute all stages from the verified durable snapshot, including first use.
@@ -113,3 +128,4 @@ if [ "$GENTOO_MODERN_KERNEL_READY" = 1 ]; then
     . "$SCRIPT_DIR/stages/90-native-base-runtime.sh"
 fi
 printf 'Resume: bash %s/gentoo.sh build\n' "$SCRIPT_DIR"
+)

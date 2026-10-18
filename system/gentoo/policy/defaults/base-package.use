@@ -6,3 +6,6 @@ sys-fs/lvm2 lvm
 net-wireless/wpa_supplicant dbus
 # Keep firmware selection limited to the reviewed savedconfig payload.
 =sys-kernel/linux-firmware-20260916 savedconfig redistributable -initramfs
+
+# The root installer must preserve ACLs, capabilities and extended attributes.
+net-misc/rsync acl xattr

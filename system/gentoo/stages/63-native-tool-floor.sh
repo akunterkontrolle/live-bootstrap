@@ -4,8 +4,8 @@
 . "$SCRIPT_DIR/lib/native.sh"
 . "$SCRIPT_DIR/lib/native-tools.sh"
 
-native_host_lzip() {
-    local lock=sources/native-lzip-1.26.lock archive=lzip-1.26.tar.gz source build marker hash
+native_host_lzip() (
+    local lock="$SCRIPT_DIR/sources/native-lzip-1.26.lock" archive=lzip-1.26.tar.gz source build marker hash
     gentoo_prepare_source "$lock"
     source="$WORK_ROOT/sources/lzip-1.26"
     build="$WORK_ROOT/build/native-host-lzip-1.26"
@@ -31,10 +31,10 @@ native_host_lzip() {
             gentoo_die 'host lzip receipt source mismatch'
         "$WORK_ROOT/native-build-tools/bin/lzip" --version >/dev/null
     fi
-}
+)
 
-native_build_file() {
-    local archive=file-5.48.tar.gz lock=sources/native-file-5.48.lock source
+native_build_file() (
+    local archive=file-5.48.tar.gz lock="$SCRIPT_DIR/sources/native-file-5.48.lock" source
     local host_build="$NATIVE_BUILDS/file-5.48-host" target_build="$NATIVE_BUILDS/file-5.48-target"
     local host_file="$host_build/src/file" target_file="$NATIVE_ROOT/usr/bin/file"
     local host_marker="$WORK_ROOT/state/63-file-host.receipt" target_marker="$WORK_ROOT/state/63-file-target.receipt"
@@ -85,7 +85,7 @@ native_build_file() {
             gentoo_die 'native File receipt does not match its output'
         native_run "$target_file" --version >/dev/null
     fi
-}
+)
 
 native_utility_action() {
     # m4 and ncurses precede shell utilities; make's .tar.lz extractor is
@@ -100,13 +100,13 @@ native_utility_action() {
 
     # The reviewed LFS fix removes a bootstrap-only Gawk extra target that
     # otherwise tries to execute a target binary during this cross build.
-    gentoo_prepare_source sources/native-gawk-5.4.1.lock
+    gentoo_prepare_source "$SCRIPT_DIR/sources/native-gawk-5.4.1.lock"
     local gawk_source="$WORK_ROOT/sources/gawk-5.4.1" patch_receipt="$WORK_ROOT/state/63-gawk-source-patch.receipt"
     if [ ! -s "$patch_receipt" ]; then
         sed -i 's/extras//' "$gawk_source/Makefile.in"
         ! grep -q extras "$gawk_source/Makefile.in" || gentoo_die 'Gawk extras workaround did not apply'
         printf 'source sha512=%s\npatched Makefile.in sha256=%s\nrecipe=lfs13-gawk-extras-removal-v1\n' \
-            "$(awk -F '|' '{sub(/^sha512=/,"",$3);print $3}' sources/native-gawk-5.4.1.lock)" \
+            "$(awk -F '|' '{sub(/^sha512=/,"",$3);print $3}' "$SCRIPT_DIR/sources/native-gawk-5.4.1.lock")" \
             "$(sha256sum "$gawk_source/Makefile.in" | cut -d' ' -f1)" > "$patch_receipt.tmp"
         sync "$patch_receipt.tmp"; mv "$patch_receipt.tmp" "$patch_receipt"; sync "$WORK_ROOT/state"
     else

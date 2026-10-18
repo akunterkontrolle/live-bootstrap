@@ -18,7 +18,7 @@ portage_host_action() {
         MAKEOPTS="-j$GENTOO_PORTAGE_MAKE_JOBS" PORTAGE_BINHOST= \
         "$HOST_PREFIX/bin/python3.12" "$PORTAGE_SOURCE/bin/emerge" --version 2>&1 |
         tee "$WORK_ROOT/state/portage-version.txt"
-    grep -Fq 'Portage 3.0.82.2' "$WORK_ROOT/state/portage-version.txt" ||
+    portage_source_version_verify "$PORTAGE_SOURCE" "$WORK_ROOT/state/portage-version.txt" "$HOST_PREFIX/bin/python3.12" ||
         gentoo_die 'source Portage version self-check failed'
     PYTHONPATH="$PORTAGE_SOURCE/lib" "$HOST_PREFIX/bin/python3.12" \
         "$SCRIPT_DIR/probes/portage-integrity.py"
@@ -38,7 +38,7 @@ portage_host_verify() {
     gentoo_prepare_source sources/portage.lock || return 1
     portage_verify_guest_account || return 1
     [ -s "$WORK_ROOT/state/portage-version.txt" ] || return 1
-    grep -Fq 'Portage 3.0.82.2' "$WORK_ROOT/state/portage-version.txt" || return 1
+    portage_source_version_verify "$PORTAGE_SOURCE" "$WORK_ROOT/state/portage-version.txt" "$HOST_PREFIX/bin/python3.12" || return 1
     portage_manifest_guard_check || return 1
     portage_repository_guard_check || return 1
     "$HOST_PREFIX/bin/python3.12" -c 'import bz2, ssl, zlib' || return 1
@@ -48,7 +48,8 @@ portage_host_verify() {
         EMERGE_DEFAULT_OPTS="--jobs=$GENTOO_PORTAGE_JOBS --load-average=$GENTOO_PORTAGE_LOAD_AVERAGE --usepkg=n --getbinpkg=n --buildpkg=n" \
         MAKEOPTS="-j$GENTOO_PORTAGE_MAKE_JOBS" PORTAGE_BINHOST= \
         "$HOST_PREFIX/bin/python3.12" "$PORTAGE_SOURCE/bin/emerge" --version 2>&1 |
-        grep -F 'Portage 3.0.82.2' || return 1
+        tee "$WORK_ROOT/state/portage-version-check.txt" || return 1
+    portage_source_version_verify "$PORTAGE_SOURCE" "$WORK_ROOT/state/portage-version-check.txt" "$HOST_PREFIX/bin/python3.12" || return 1
     PYTHONPATH="$PORTAGE_SOURCE/lib" "$HOST_PREFIX/bin/python3.12" \
         "$SCRIPT_DIR/probes/portage-integrity.py" || return 1
     portage_manifest_guard_check || return 1
@@ -57,7 +58,7 @@ portage_host_verify() {
 # Portage settings affect runtime commands but do not fingerprint built sources.
 portage_render_config
 fingerprint=$(gentoo_fingerprint stages/52-portage-host.sh lib/portage-host.sh lib/manifests.sh lib/sources.sh \
-    probes/portage-integrity.py sources/portage.lock \
+    probes/portage-integrity.py probes/portage-version.py sources/portage.lock \
     "$WORK_ROOT/state/50-gentoo-sources.done" "$WORK_ROOT/state/51-host-python.done")
 gentoo_run_stage 52-portage-host "$fingerprint" portage_host_action portage_host_verify
 printf 'Source-built Python and pinned source-only Portage host are ready.\n'

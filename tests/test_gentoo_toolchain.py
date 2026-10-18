@@ -38,6 +38,30 @@ class ToolchainTests(unittest.TestCase):
         prefix += 'mkdir -p "$WORK_ROOT/state" "$WORK_ROOT/build/probes"\n'
         return prefix + ''.join(f'. {shlex.quote(str(GENTOO / "lib" / (name + ".sh")))}\n' for name in names)
 
+    def test_libgcc_runtime_binds_both_abi_directories_and_preserves_flags(self):
+        recipe = (GENTOO / 'stages/18-gcc-linux-runtime.sh').read_text().split('\nfingerprint=', 1)[0]
+        prefix = self.helpers('common', 'toolchain') + recipe + """
+mkdir -p "$GCC_C_BUILD/$TARGET/libgcc" "$GCC_C_BUILD/$TARGET/32/libgcc"
+printf 'CC = /build/gcc/xgcc -B/original/\\n' > "$GCC_C_BUILD/$TARGET/libgcc/Makefile"
+printf 'CC = %s/cc-for-target -B/abi32/ -m32\\n' "$GCC_C_BUILD" > "$GCC_C_BUILD/$TARGET/32/libgcc/Makefile"
+make() { printf '%s\\n' "$*" >> "$WORK_ROOT/make.log"; }
+"""
+        self.shell(prefix + """
+gcc_linux_build_libgcc
+gcc_linux_build_libgcc
+grep -Fx "CC = $GCC_C_BUILD/cc-for-target -B/original/" "$GCC_C_BUILD/$TARGET/libgcc/Makefile"
+grep -Fx "CC = $GCC_C_BUILD/cc-for-target -B/abi32/ -m32" "$GCC_C_BUILD/$TARGET/32/libgcc/Makefile"
+""")
+        (self.directory / 'work/make.log').unlink()
+        self.shell(prefix + """
+printf 'CC = /wrong/compiler -m32\\n' > "$GCC_C_BUILD/$TARGET/32/libgcc/Makefile"
+gcc_linux_build_libgcc
+""", success=False)
+        calls = (self.directory / 'work/make.log').read_text()
+        self.assertIn('configure-target-libgcc', calls)
+        self.assertNotIn('all-target-libgcc', calls)
+        self.assertNotIn('install-target-libgcc', calls)
+
     def test_interrupted_build_refuses_new_recipe_before_action(self):
         prefix = self.helpers('common', 'state') + '''
 echo original > recipe

@@ -11,9 +11,12 @@ native_cross_cxx() {
     "$NATIVE_CROSS_GXX" --sysroot="$NATIVE_ROOT" \
         -B"$NATIVE_ROOT/usr/lib64/" -L"$NATIVE_ROOT/usr/lib64" "$@"
 }
-native_build_one() {
+native_build_one() (
     local archive=$1 lock=$2 package=$3 binary=$4 version_arg=$5 configure_flags=$6
-    local source build="$NATIVE_BUILDS/$package" marker="$WORK_ROOT/state/61-$package.done"
+    local lock_hash program_hash source build="$NATIVE_BUILDS/$package" marker="$WORK_ROOT/state/61-$package.done"
+    case "$lock" in /*) ;; *) lock="$SCRIPT_DIR/$lock" ;; esac
+    lock_hash=$(sha256sum < "$lock" | cut -d' ' -f1) || gentoo_die "cannot hash native source lock: $lock"
+    [[ "$lock_hash" =~ ^[0-9a-f]{64}$ ]] || gentoo_die "invalid native lock hash: $lock"
     gentoo_prepare_source "$lock"
     source="$WORK_ROOT/sources/${archive%.tar.*}"
     [ -x "$source/configure" ] || gentoo_die "$package pinned source lacks configure"
@@ -32,16 +35,21 @@ native_build_one() {
         [ -x "$NATIVE_ROOT/usr/bin/$binary" ] || gentoo_die "$package did not install $binary"
         native_verify_elf "$NATIVE_ROOT/usr/bin/$binary" ELF64 || gentoo_die "$package output is not ELF64"
         native_run "$NATIVE_ROOT/usr/bin/$binary" "$version_arg" >/dev/null
-        printf 'complete %s\narchive=%s\nrecipe=stage61-%s-v1\n' \
-            "$(date -u +%FT%TZ)" "$(sha256sum "$lock" | cut -d' ' -f1)" "$package" \
+        program_hash=$(sha256sum < "$NATIVE_ROOT/usr/bin/$binary" | cut -d' ' -f1) || return 1
+        printf 'complete %s\narchive=%s\nrecipe=stage61-%s-v2\nprogram sha256=%s\n' \
+            "$(date -u +%FT%TZ)" "$lock_hash" "$package" "$program_hash" \
             > "$marker.tmp"
         sync "$marker.tmp"
         mv "$marker.tmp" "$marker"
         sync "$WORK_ROOT/state"
     fi
     [ -x "$NATIVE_ROOT/usr/bin/$binary" ] || gentoo_die "completed $package output is missing"
+    grep -Fxq "archive=$lock_hash" "$marker" &&
+        grep -Fxq "recipe=stage61-$package-v2" "$marker" &&
+        grep -Fxq "program sha256=$(sha256sum < "$NATIVE_ROOT/usr/bin/$binary" | cut -d' ' -f1)" "$marker" ||
+        gentoo_die "native shell-tool receipt does not match inputs/output: $package"
     native_run "$NATIVE_ROOT/usr/bin/$binary" "$version_arg" >/dev/null
-}
+)
 
 native_tools_action() {
     # Bash and coreutils establish the native shell/utility floor before the
@@ -62,6 +70,16 @@ native_tools_action() {
     fi
 }
 native_tools_verify() {
+    local package binary lock marker lock_hash
+    for package in bash-5.3 coreutils-9.11; do
+        case "$package" in bash-*) binary=bash; lock=native-bash ;; *) binary=env; lock=native-coreutils ;; esac
+        marker="$WORK_ROOT/state/61-$package.done"
+        lock_hash=$(sha256sum < "$SCRIPT_DIR/sources/$lock.lock" | cut -d' ' -f1) || return 1
+        [ -x "$NATIVE_ROOT/usr/bin/$binary" ] &&
+            grep -Fxq "archive=$lock_hash" "$marker" &&
+            grep -Fxq "recipe=stage61-$package-v2" "$marker" &&
+            grep -Fxq "program sha256=$(sha256sum < "$NATIVE_ROOT/usr/bin/$binary" | cut -d' ' -f1)" "$marker" || return 1
+    done
     [ -x "$NATIVE_ROOT/usr/bin/bash" ] && [ -x "$NATIVE_ROOT/usr/bin/env" ] || return 1
     native_verify_elf "$NATIVE_ROOT/usr/bin/bash" ELF64 || return 1
     native_verify_elf "$NATIVE_ROOT/usr/bin/env" ELF64 || return 1

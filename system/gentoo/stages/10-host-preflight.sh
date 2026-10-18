@@ -4,7 +4,7 @@
 # Nothing in this series downloads host binaries or uses GCC download_prerequisites.
 mkdir -p "$BUILDS/probes" "$WORK_ROOT/distfiles" "$SOURCES" "$HOST_TOOLS" "$TOOLBIN" "$PREFIX/bin"
 for tool in /usr/bin/gcc /usr/bin/g++ /usr/bin/readelf make tar xz bzip2 gzip \
-    curl sha512sum awk bison flex perl python3 autoreconf autoconf automake nm; do
+    curl dhcpcd sha512sum awk bison flex perl python3 autoreconf autoconf automake nm; do
     command -v "$tool" >/dev/null || gentoo_die "missing bootstrap prerequisite: $tool"
 done
 for header in gmp.h mpfr.h mpc.h zlib.h; do
@@ -53,3 +53,8 @@ PROBE
 printf 'int main() { return 0; }\n' > "$BUILDS/probes/host-cxx.cc"
 /usr/bin/g++ "$BUILDS/probes/host-cxx.cc" -o "$BUILDS/probes/host-cxx"
 "$BUILDS/probes/host-cxx"
+
+# Catch the actual static bootstrap TLS/zlib prerequisite before any long
+# compiler/kernel build, rather than discovering it at the Portage-host stage.
+. "$SCRIPT_DIR/lib/python.sh"
+gentoo_python_host_inputs

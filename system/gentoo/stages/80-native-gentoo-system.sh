@@ -23,7 +23,7 @@ native_gentoo_system_action() (
     PORTAGE_SOURCE="$PORTAGE_SOURCE"
     driver_hash=$( {
         sha256sum "$SCRIPT_DIR/lib/native-gentoo-system.sh" "$SCRIPT_DIR/build-bootstrap-scanelf.sh" \
-            "$SCRIPT_DIR/audit-resolved-sources.py" "$SCRIPT_DIR/stages/system/"*.sh
+            "$SCRIPT_DIR/audit-resolved-sources.py" "$SCRIPT_DIR/probes/reinstall-plan.py" "$SCRIPT_DIR/stages/system/"*.sh
     } | sha256sum | cut -d' ' -f1 )
     marker_driver_recorded() { grep -Fxq "driver sha256=$driver_hash" "$1" || grep -Fxq "script sha256=$driver_hash" "$1"; }
     native_gentoo_system_mounts
@@ -128,7 +128,7 @@ native_system_fingerprint=$(gentoo_fingerprint \
     stages/system/30-bootstrap-prerequisites.sh stages/system/40-runtime-providers.sh \
     stages/system/50-elf-and-compiler.sh stages/system/60-gentoo-bootstrap.sh \
     stages/system/70-system.sh stages/system/80-verify.sh \
-    build-bootstrap-scanelf.sh audit-resolved-sources.py \
+    build-bootstrap-scanelf.sh audit-resolved-sources.py probes/reinstall-plan.py \
     sources/native-xz-5.8.3.lock sources/native-tar-1.35.lock sources/native-gawk-5.4.1.lock \
     sources/wget.lock sources/glibc.lock sources/perl.lock config.inputs.sh \
     "$WORK_ROOT/state/71-native-portage.done" "$WORK_ROOT/state/70-native-runtimes.done" \

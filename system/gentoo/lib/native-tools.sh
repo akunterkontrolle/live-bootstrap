@@ -26,9 +26,10 @@ native_tool_unpack_lzip() {
     printf '%s\n' "$source"
 }
 
-native_tool_build() {
+native_tool_build() (
     local archive=$1 lock=$2 package=$3 binary=$4 version_arg=$5 recipe=$6
     shift 6
+    case "$lock" in /*) ;; *) lock="$SCRIPT_DIR/$lock" ;; esac
     local source build marker source_hash configure_hash program
     local build_triple=$(/usr/bin/gcc -dumpmachine)
     local -a configure_args=("$@")
@@ -94,4 +95,4 @@ EOF
     sync "$marker.tmp"
     mv "$marker.tmp" "$marker"
     sync "$WORK_ROOT/state"
-}
+)

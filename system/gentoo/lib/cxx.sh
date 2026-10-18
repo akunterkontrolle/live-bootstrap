@@ -73,17 +73,36 @@ cxx_remove_shadow_crt() {
 }
 
 cxx_bind_libgcc() {
-    local file count=0
+    local file count=0 list="$GCC_CXX_BUILD/.libgcc-makefiles"
+    # ELF32 libgcc is a sibling of the default libgcc directory. Enumerate both
+    # ABIs without process substitution, which needs working /proc/self/fd.
+    find "$GCC_CXX_BUILD/$TARGET" -type f -path '*/libgcc/Makefile' -print > "$list"
     while IFS= read -r file; do
-        if grep -Eq '^CC = .*/gcc/xgcc([[:space:]]|$)' "$file"; then
-            awk -v wrapper="$GCC_CXX_BUILD/cc-for-target" '
-                /^CC = .*\/gcc\/xgcc([[:space:]]|$)/ {print "CC = " wrapper; next} {print}
-            ' "$file" > "$file.tmp"
-            mv "$file.tmp" "$file"
-        fi
-        if grep -Fxq "CC = $GCC_CXX_BUILD/cc-for-target" "$file"; then count=$((count + 1)); fi
-    done < <(find "$GCC_CXX_BUILD/$TARGET/libgcc" -type f -name Makefile -print)
-    [ "$count" -gt 0 ] || gentoo_die 'no recursive libgcc compiler binding found'
+        awk -v wrapper="$GCC_CXX_BUILD/cc-for-target" '
+            /^CC = .*\/gcc\/xgcc([[:space:]]|$)/ {
+                command=$0
+                sub(/^CC = /, "", command)
+                sub(/^[^[:space:]]+/, "", command)
+                print "CC = " wrapper command
+                next
+            }
+            {print}
+        ' "$file" > "$file.tmp"
+        mv "$file.tmp" "$file"
+        # Preserve configure's -B and ABI flags, checking the executable token.
+        awk -v wrapper="$GCC_CXX_BUILD/cc-for-target" '
+            /^CC[[:space:]]*=/ {
+                seen++
+                sub(/^CC[[:space:]]*=[[:space:]]*/, "")
+                if ($0 == wrapper || index($0, wrapper " ") == 1 ||
+                    index($0, wrapper "\t") == 1) good++
+            }
+            END {exit !(seen == 1 && good == 1)}
+        ' "$file" || gentoo_die "unexpected libgcc compiler binding: $file"
+        count=$((count + 1))
+    done < "$list"
+    rm -f "$list"
+    [ "$count" -gt 0 ] || gentoo_die 'no recursive libgcc Makefiles found'
 }
 
 cxx_fix_libtool() {

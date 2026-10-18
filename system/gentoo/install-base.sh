@@ -8,6 +8,8 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
 . "$SCRIPT_DIR/lib/state.sh"
 . "$SCRIPT_DIR/lib/devices.sh"
 . "$SCRIPT_DIR/lib/storage.sh"
+. "$SCRIPT_DIR/lib/mounts.sh"
+. "$SCRIPT_DIR/lib/bootstrap-tools.sh"
 MODE=--plan; [ "$#" -eq 0 ] || MODE=$1
 case "$MODE" in --plan|--initialize-storage|--resume-storage|--install-root) ;; *) gentoo_die 'usage: install-base.sh [--plan|--initialize-storage|--resume-storage|--install-root]' ;; esac
 [ "$#" -le 1 ] || gentoo_die 'pass one installer mode'
@@ -16,6 +18,7 @@ case "$-" in *x*) gentoo_die 'disable shell tracing before using the installer' 
 gentoo_mount_workspace
 WORK_ROOT=/build/gentoo-bootstrap
 NATIVE_ROOT="$WORK_ROOT/native-root-x86_64"
+export PATH="$WORK_ROOT/host-tools/bin:${PATH:-/usr/bin:/bin}:/usr/sbin:/sbin"
 STATE="$WORK_ROOT/install-base-state"
 VG=$GENTOO_SYSTEM_VOLUME_GROUP
 ROOT_GIB=$GENTOO_LAYOUT_ROOT_GIB; SWAP_GIB=$GENTOO_LAYOUT_SWAP_GIB
@@ -149,28 +152,33 @@ resume_storage() {
         [ "$(readlink -f "$mapper_source")" = "$(readlink -f "$ROOT_PART")" ] || fail 'existing mapper belongs to another disk.'
     fi
     if [ ! -s "$STATE/pv.done" ]; then
-        native_run pvs --noheadings /dev/mapper/gentoo-crypt >/dev/null 2>&1 && fail 'PV without receipt; inspect metadata.'
-        native_run pvcreate --yes /dev/mapper/gentoo-crypt; phase pv.done 'PV=/dev/mapper/gentoo-crypt'
+        lvm_run pvs --noheadings /dev/mapper/gentoo-crypt >/dev/null 2>&1 && fail 'PV without receipt; inspect metadata.'
+        lvm_run pvcreate --yes /dev/mapper/gentoo-crypt; phase pv.done 'PV=/dev/mapper/gentoo-crypt'
     fi
     pv=$(lvm_run pvs --noheadings -o pv_name --select 'pv_name=/dev/mapper/gentoo-crypt' | awk '{$1=$1; if(NF) print}'); [ "$pv" = /dev/mapper/gentoo-crypt ] || fail 'PV identity mismatch.'
     if [ ! -s "$STATE/vg.done" ]; then
         vg=$(lvm_run pvs --noheadings -o vg_name /dev/mapper/gentoo-crypt | tr -d '[:space:]'); [ -z "$vg" ] || fail 'VG without receipt; inspect metadata.'
-        native_run vgcreate --physicalextentsize 4M "$VG" /dev/mapper/gentoo-crypt; phase vg.done "VG=$VG"
+        lvm_run vgcreate --physicalextentsize 4M "$VG" /dev/mapper/gentoo-crypt; phase vg.done "VG=$VG"
     fi
     vg=$(lvm_run pvs --noheadings -o vg_name /dev/mapper/gentoo-crypt | tr -d '[:space:]'); [ "$vg" = "$VG" ] || fail 'VG identity mismatch.'
     [ "$(lvm_run vgs --noheadings --units b --nosuffix -o vg_extent_size "$VG" | tr -d '[:space:]')" = 4194304 ] || fail 'VG extent size differs from the storage plan.'
+    # A cold-boot continuation has no udev daemon to activate LVs or recreate
+    # their /dev/VG links. Activate checked metadata and create nodes explicitly.
+    lvm_run vgchange --activate y "$VG"
+    lvm_run vgmknodes "$VG"
     for lv in root swap home; do
         device="/dev/$VG/$lv"
         if [ ! -s "$STATE/lv-$lv.done" ]; then
             [ ! -e "$device" ] && [ ! -e "/dev/mapper/$VG-$lv" ] || fail "$lv exists without receipt; inspect."
             case "$lv" in
-                root) native_run lvcreate --yes --size "$ROOT_GIB"G --name root "$VG" ;;
-                swap) native_run lvcreate --yes --size "$SWAP_GIB"G --name swap "$VG" ;;
+                root) lvm_run lvcreate --yes --size "$ROOT_GIB"G --name root "$VG" ;;
+                swap) lvm_run lvcreate --yes --size "$SWAP_GIB"G --name swap "$VG" ;;
                 home)
                     free=$(lvm_run vgs --noheadings -o vg_free_count "$VG" | tr -d '[:space:]'); needed=$(((RESERVE_GIB + HOME_MIN_GIB) * 256))
                     [ "$free" -gt "$needed" ] || fail 'not enough extents for home and reserve.'
-                    home_extents=$((free - RESERVE_GIB * 256)); native_run lvcreate --yes --extents "$home_extents" --name home "$VG" ;;
+                    home_extents=$((free - RESERVE_GIB * 256)); lvm_run lvcreate --yes --extents "$home_extents" --name home "$VG" ;;
             esac
+            lvm_run vgmknodes "$VG"
             phase "lv-$lv.done" "LV=$VG/$lv"
         fi
         [ -b "$device" ] || fail "$lv is missing."
@@ -179,7 +187,7 @@ resume_storage() {
     [ "$(lvm_run lvs --noheadings --units b --nosuffix -o lv_size "$VG/swap" | tr -d '[:space:]')" = "$((SWAP_GIB * 1073741824))" ] || fail 'swap LV size differs from the plan.'
     home_bytes=$(lvm_run lvs --noheadings --units b --nosuffix -o lv_size "$VG/home" | tr -d '[:space:]')
     [[ "$home_bytes" =~ ^[0-9]+$ ]] && [ "$home_bytes" -ge "$((HOME_MIN_GIB * 1073741824))" ] || fail 'home LV is below its configured minimum or unreadable.'
-    native_run vgmknodes "$VG"
+    lvm_run vgmknodes "$VG"
     for fs in root home swap; do
         device="/dev/$VG/$fs"
         if [ ! -s "$STATE/fs-$fs.done" ]; then
@@ -222,7 +230,7 @@ target_unmounts() {
         mountpoint -q "$p" && umount "$p" || true
     done
     if [ "${OPENED_MAPPER_BY_US:-0}" = 1 ]; then
-        native_run vgchange --activate n "$VG" >/dev/null 2>&1 || true
+        lvm_run vgchange --activate n "$VG" >/dev/null 2>&1 || true
         native_run cryptsetup close gentoo-crypt >/dev/null 2>&1 || true
         OPENED_MAPPER_BY_US=0
     fi
@@ -316,7 +324,7 @@ install_root() {
         mapper_source=$(native_run cryptsetup status gentoo-crypt | sed -n 's/^[[:space:]]*device:[[:space:]]*//p')
         [ "$(readlink -f "$mapper_source")" = "$(readlink -f "$ROOT_PART")" ] || fail 'existing mapper belongs to another disk.'
     fi
-    native_run vgchange --activate y "$VG"; native_run vgmknodes "$VG"
+    lvm_run vgchange --activate y "$VG"; lvm_run vgmknodes "$VG"
     [ -b "$root_lv" ] && [ -b "$home_lv" ] && [ -b "$swap_lv" ] || fail 'expected LVs are missing.'
     mkdir -p "$TARGET_ROOT"
     if mountpoint -q "$TARGET_ROOT"; then
@@ -334,8 +342,7 @@ install_root() {
     grep -Fxq "root UUID=$root_uuid" "$STATE/storage.done" && grep -Fxq "home UUID=$home_uuid" "$STATE/storage.done" &&
         grep -Fxq "swap UUID=$swap_uuid" "$STATE/storage.done" && grep -Fxq "LUKS UUID=$luks_uuid" "$STATE/storage.done" || fail 'storage receipt mismatch.'
     if [ ! -s "$STATE/root-filesystem.done" ]; then
-        [ -x "$WORK_ROOT/host-tools/bin/rsync" ] || fail 'source-built host rsync is missing.'
-        "$WORK_ROOT/host-tools/bin/rsync" -aHAX --numeric-ids \
+        rsync -aHAX --numeric-ids \
             --exclude=/dev/*** --exclude=/proc/*** --exclude=/sys/*** --exclude=/run/*** --exclude=/tmp/*** \
             --exclude=/mnt/*** --exclude=/media/*** --exclude=/build/*** --exclude=/gentoo-scratch/*** \
             --exclude=/host-build/*** --exclude=/var/tmp/portage/*** --exclude=/var/cache/distfiles/*** \
@@ -350,7 +357,7 @@ install_root() {
     mkdir -p "$TARGET_ROOT/boot" "$TARGET_ROOT/lib/modules/$module_release"
     install -m 0644 "$WORK_ROOT/artifacts/kernel-$RELEASE/bzImage" "$TARGET_ROOT/boot/vmlinuz-$module_release"
     install -m 0644 "$WORK_ROOT/artifacts/kernel-$RELEASE/config" "$TARGET_ROOT/boot/config-$module_release"
-    "$WORK_ROOT/host-tools/bin/rsync" -aH --numeric-ids \
+    rsync -aH --numeric-ids \
         "$WORK_ROOT/artifacts/kernel-$RELEASE/modules/lib/modules/$module_release/" "$TARGET_ROOT/lib/modules/$module_release/"
     printf 'UUID=%s\t/\text4\tdefaults,noatime\t0 1\nUUID=%s\t/home\text4\tdefaults,noatime\t0 2\nUUID=%s\tnone\tswap\tsw\t0 0\n' \
         "$root_uuid" "$home_uuid" "$swap_uuid" > "$TARGET_ROOT/etc/fstab.tmp"
@@ -427,6 +434,7 @@ install_root() {
     phase root-install.done "root UUID=$root_uuid" "kernel release=$module_release"
     printf 'Encrypted base installed. VM: python3 system/gentoo/vm.py boot-installed --run-dir RUN_DIRECTORY --apply\n'
 }
+gentoo_use_native_storage_tools
 for utility in awk blkid blockdev cat chroot cmp cp date dumpe2fs find findmnt grep install lsblk mkdir mount mountpoint mv readlink rsync sed sha256sum sort sync umount wipefs; do
     command -v "$utility" >/dev/null 2>&1 || fail "missing command: $utility"
 done

@@ -40,30 +40,38 @@ WRAPPER
 }
 gcc_linux_build_libgcc() {
     local wrapper="$GCC_C_BUILD/cc-for-target" target_makefile bound=0
+    local list="$GCC_C_BUILD/.libgcc-makefiles"
     cd "$GCC_C_BUILD"
     make "CC_FOR_TARGET=$wrapper" configure-target-libgcc
-    # Top-level CC_FOR_TARGET does not replace every generated recursive CC.
-    # Bind those that still name xgcc, including multilib sub-Makefiles.
+    # Both ABI directories are siblings beneath the target directory. Use a
+    # regular list file so this also works without /proc/self/fd support.
+    find "$GCC_C_BUILD/$TARGET" -type f -path '*/libgcc/Makefile' -print > "$list"
     while IFS= read -r target_makefile; do
-        if grep -Eq '^CC = .*/gcc/xgcc([[:space:]]|$)' "$target_makefile"; then
-            awk -v wrapper="$wrapper" '
-                /^CC = .*\/gcc\/xgcc([[:space:]]|$)/ {print "CC = " wrapper; next} {print}
-                ' "$target_makefile" > "$target_makefile.tmp"
-            mv "$target_makefile.tmp" "$target_makefile"
-        fi
-        # configure-target-libgcc may append ABI-specific -B and -m32 flags
-        # directly to CC. Validate the executable token, not an exact line
-        # match, so those required recursive-make arguments remain intact.
-        if awk -v wrapper="$wrapper" '
+        awk -v wrapper="$wrapper" '
+            /^CC = .*\/gcc\/xgcc([[:space:]]|$)/ {
+                command=$0
+                sub(/^CC = /, "", command)
+                sub(/^[^[:space:]]+/, "", command)
+                print "CC = " wrapper command
+                next
+            }
+            {print}
+        ' "$target_makefile" > "$target_makefile.tmp"
+        mv "$target_makefile.tmp" "$target_makefile"
+        # Retain configure's -B and ABI flags while validating the executable.
+        awk -v wrapper="$wrapper" '
             /^CC[[:space:]]*=/ {
+                seen++
                 sub(/^CC[[:space:]]*=[[:space:]]*/, "")
                 if ($0 == wrapper || index($0, wrapper " ") == 1 ||
-                    index($0, wrapper "\t") == 1) found=1
+                    index($0, wrapper "\t") == 1) good++
             }
-            END {exit !found}
-        ' "$target_makefile"; then bound=$((bound + 1)); fi
-    done < <(find "$GCC_C_BUILD/$TARGET/libgcc" -type f -name Makefile -print)
-    [ "$bound" -gt 0 ] || gentoo_die 'no recursive libgcc rule uses the ABI-aware compiler'
+            END {exit !(seen == 1 && good == 1)}
+        ' "$target_makefile" || gentoo_die "unexpected libgcc compiler binding: $target_makefile"
+        bound=$((bound + 1))
+    done < "$list"
+    rm -f "$list"
+    [ "$bound" -gt 0 ] || gentoo_die 'no recursive libgcc Makefiles found'
     make -j"$JOBS" "CC=$wrapper" "CC_FOR_TARGET=$wrapper" all-target-libgcc
     make "CC=$wrapper" "CC_FOR_TARGET=$wrapper" install-target-libgcc
 }

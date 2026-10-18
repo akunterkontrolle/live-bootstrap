@@ -17,7 +17,11 @@ They need Bash, GNU coreutils/findutils, awk, sed, Perl and the pinned util-linu
 and `lsblk`; continuation locking therefore uses Perl's kernel `flock(2)` with
 a pipe-held process lifetime, and early mount checks read `/proc/mounts`.
 The post-reboot handoff loads this mount-check fallback before probing `/proc`
-and `/sys`.
+and `/sys`. It then starts the original source-built `dhcpcd`, waits up to 60
+seconds for an IPv4 lease, and runs the continuation after DHCP succeeds.
+The bootstrap root already includes dhcpcd and its resolver hooks; the cold
+boot with `init=/bin/bash` needs to start it again. Use a DHCP-enabled wired
+connection for bootstrap networking on the T440p.
 Hardware workspace identity checks use sysfs because `lsblk` is absent there;
 the later installed-system storage commands run with Gentoo's own util-linux.
 Hardware identification also needs `blockdev`, `/sys` and persistent
@@ -158,16 +162,16 @@ continuation image or recovering a run whose original image was created without
 6. **Guest:** mount the workspace and use its recorded handoff:
 
    ```sh
-   mkdir -p /proc /sys /build
-   mountpoint -q /proc || mount -t proc proc /proc
-   mountpoint -q /sys || mount -t sysfs sysfs /sys
+   mkdir -p /build
    mount -t ext4 -L GENTOO_BUILD /build  # omit if already mounted
    version=$(cat /build/gentoo-bootstrap/current-handoff)
    bash /build/gentoo-bootstrap/handoff/$version/resume.sh
    ```
 
-   Substitute your configured label. The resume script mounts devpts/tmpfs as
-   needed and runs the exact saved input snapshot. The driver rechecks outputs
+   Substitute your configured label. The resume script mounts proc/sysfs/devpts/tmpfs as
+   needed, restores IPv4 networking with dhcpcd, and runs the exact saved input
+   snapshot. If DHCP times out, check the network link and retry the resume
+   script. The driver rechecks outputs
    and verifies Linux 6.12.111, x86_64, a boot ID different from the kernel's build boot, and the GNU build ID
    from `/sys/kernel/notes` matching the saved vmlinux build ID. It then completes
    the multilib C/C++ toolchain and executes both ABIs (batch 4), then builds
@@ -568,6 +572,13 @@ The visible order is:
    libc and integer division; C++ exercises threads, allocation, strings, vectors,
    iostreams and exception unwinding. Each executable's ELF class, interpreter
    and needed libraries are checked. Execution must exit zero with exact output.
+
+The intermediate C++ probe queries the installed driver's include search for
+each ABI after libstdc++ installation. It passes the workspace-owned common,
+ABI-specific `bits/c++config.h`, and backward header directories explicitly to
+`xg++` with `-nostdinc++`. The compiler build-tree driver does not inherit the
+installed driver's C++ header paths. These acceptance-only settings live in
+`lib/runtime.sh` and do not change the completed compiler/library recipes.
 
 Execution invokes the source-built loader under `sysroot-x86_64/lib32` or
 `lib64`, with a clean environment, disabled loader cache and explicit library
@@ -997,3 +1008,80 @@ a mismatched hibernation generation; reboot cleanly and confirm the same signed
 generation starts. Run `sudo ms1504-signed-generation status` after reboot and
 retain the result with the acceptance notes. VM desktop acceptance does not
 establish T440p firmware, signing, or device acceptance.
+
+## Audited repair for the stage-50 VM checkpoint
+
+See [the audit report](AUDIT-2026-10-18.md) for findings, tests and outstanding
+VM/hardware acceptance. For the VM that completed stage 50 and stopped on
+`missing host development library: libssl.so`, copy the **entire** contents of
+[repair-vm-after-audit.paste.txt](repair-vm-after-audit.paste.txt) into its Bash
+serial shell. This is the consolidated repair; earlier per-error repairs are
+not needed at this checkpoint. Preparation does not start a build. Then run:
+
+```sh
+bash /build/gentoo-bootstrap/resume-after-audit.sh
+```
+
+The repair verifies the active snapshot, takes the process-bound driver lock,
+requires completed stages 43/50 and no started stage 51 or later, and publishes
+a new snapshot. It preserves configuration, completed GCC recipes, libraries,
+all existing stage state and the old snapshot. It does not format storage.
+A repair receipt records previous/new input IDs and file/state hashes. If the
+checkpoint differs, it refuses the update and leaves Bash running. Copying the
+whole file runs preparation in a protected child, including with `errexit` set
+in the calling shell. Do not extract individual Python or shell fragments.
+
+The resumed driver restores IPv4 using the existing source-built dhcpcd,
+prepares virtual filesystems, and establishes a controlling serial terminal
+when needed. Ctrl+C can then interrupt foreground builds. An exited build
+returns to the calling shell; never type `exit` in the PID-1 shell. The launcher
+has `-monitor none`; QMP is available at `RUN_DIRECTORY/qmp.sock`, alongside
+`serial.sock`. It has no interactive monitor escape sequence.
+
+Host Python uses the bootstrap's actual static `libssl.a`, `libcrypto.a` and
+`libz.a`, plus source-built bzip2. The preflight links and runs a TLS/hash/zlib
+probe before long builds. CPython embeds `_ssl`, `_hashlib`, `zlib` and `_bz2`;
+no fabricated shared-library links are needed. Native GCC builds its separately
+pinned GMP/MPFR/MPC prerequisites for ELF64/glibc and uses the runnable cross
+compiler for target libraries. The installer uses the native Gentoo util-linux
+inspectors and ACL/xattr-capable rsync through the saved GNU loader, keeping
+bootstrap and native libraries separate.
+
+The standalone repair is generated from the reviewed source files:
+
+```sh
+python3 system/gentoo/maintenance/make-audit-repair.py
+```
+
+Regenerate and rerun the repair tests whenever one of its 32 payload files
+changes. The generator embeds the full files so it can preserve earlier VM
+repairs without relying on an exact historical driver revision.
+
+If an already-applied audit repair stops on `unexpected /dev/stdin node`, use
+[repair-vm-fd-links.paste.txt](repair-vm-fd-links.paste.txt) and then repeat the
+resume command above. This smaller follow-up updates only the mount helper.
+Existing descriptor placeholders are preserved in `/dev/.gentoo-fd-*/original`
+before creating their standard proc-fd links. Generate this follow-up with
+`python3 system/gentoo/maintenance/make-audit-repair.py --mounts-only`.
+
+If stage 51 completed and stage 52 stopped on `source Portage version self-check
+failed` with a `Portage HEAD` banner, paste
+[repair-vm-portage-version.paste.txt](repair-vm-portage-version.paste.txt), then
+run the resume command above. Source archives legitimately report HEAD before
+installation. The corrected check verifies the pinned source's declared version
+and matching runtime banner. This repair also fixes the equivalent check in
+native stage 71, backs up only failed stage 52's fingerprint, and preserves
+completed stage 51. Generate it with
+`python3 system/gentoo/maintenance/make-audit-repair.py --portage-version`.
+
+If native Bash finishes but stage 61 stops on missing
+`sources/native-coreutils.lock`, paste
+[repair-vm-native-paths.paste.txt](repair-vm-native-paths.paste.txt), then run the
+same resume command. It fixes directory leakage and relative lock paths in
+native stages 61–63, preserves completed stages through 60 and reuses existing
+build directories. Failed-stage and recognized legacy partial tool receipts
+are backed up before the incremental retry. Generate with
+`python3 system/gentoo/maintenance/make-audit-repair.py --native-paths`.
+The earlier `/tmp/portage-integrity-*/fixture.tar.xz` failures are deliberate
+corrupt-source tests; the following strict-digest success message confirms the
+expected rejection.

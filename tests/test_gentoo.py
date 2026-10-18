@@ -219,17 +219,17 @@ if cmp -s first-hash second-hash; then exit 1; fi
         digest = hashlib.sha256(b'pinned').hexdigest()
         prefix = self.helpers('common', 'sources')
         self.shell(prefix + f'''
-wget() {{ printf pinned > "$2"; }}
+curl() {{ while [ "$1" != --output ]; do shift; done; printf pinned > "$2"; }}
 gentoo_fetch_source https://invalid.example/source {digest} archive
 gentoo_verify_source archive {digest}
 ''')
         self.shell(prefix + f'''
-wget() {{ printf wrong > "$2"; }}
+curl() {{ while [ "$1" != --output ]; do shift; done; printf wrong > "$2"; }}
 gentoo_fetch_source https://invalid.example/source {digest} bad
 ''', success=False)
         self.assertFalse((self.directory / 'bad').exists())
         self.shell(prefix + f'''
-wget() {{ printf partial > "$2"; return 1; }}
+curl() {{ while [ "$1" != --output ]; do shift; done; printf partial > "$2"; return 1; }}
 gentoo_fetch_source https://invalid.example/source {digest} interrupted
 ''', success=False)
         self.assertFalse((self.directory / 'interrupted').exists())

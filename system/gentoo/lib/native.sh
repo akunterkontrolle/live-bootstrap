@@ -1,6 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Native x86_64 root assembled from the already verified multilib sysroot.
+. "$SCRIPT_DIR/lib/mounts.sh"
 NATIVE_ROOT="$WORK_ROOT/native-root-x86_64"
 NATIVE_SOURCES="$WORK_ROOT/sources/native"
 NATIVE_BUILDS="$WORK_ROOT/build/native"

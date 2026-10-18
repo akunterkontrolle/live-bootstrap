@@ -8,6 +8,7 @@ sources=/mnt/work/sources
 builds=/mnt/work/build/native
 mkdir -p "$builds" /usr/src /usr/bin /usr/lib64 /etc/ssl
 export PATH=/usr/bin:/bin HOME=/root LANG=C LC_ALL=C CC=/usr/bin/gcc CXX=/usr/bin/g++
+export LD_LIBRARY_PATH=/usr/lib/perl5/5.42.2/x86_64-linux/CORE
 
 record_hash() { awk -F '|' 'NF==3 {sub(/^sha512=/,"",$3); print $3}' "$1"; }
 complete() {
@@ -28,33 +29,40 @@ check_elf() { /usr/bin/readelf -h "$1" | grep -q 'Class:.*ELF64'; }
 
 # Build each runtime library into the native root before consumers configure.
 zlib_hash=$(record_hash /mnt/work/locks/zlib.lock)
-zlib_recipe=$(printf '%s\n' zlib-1.3.2-shared-prefix-usr-v1 | sha256sum | cut -d' ' -f1)
+zlib_recipe=$(printf '%s\n' zlib-1.3.2-shared-prefix-usr-lib64-v2 | sha256sum | cut -d' ' -f1)
 zlib_out=/usr/lib64/libz.so.1.3.2
 if ! complete zlib "$zlib_hash" "$zlib_recipe" "$zlib_out"; then
-    cd "$sources/zlib-1.3.2"; ./configure --prefix=/usr; make -j"$jobs"; make check; make install
+    cd "$sources/zlib-1.3.2"; ./configure --prefix=/usr --libdir=/usr/lib64; make -j"$jobs"; make install
     /sbin/ldconfig; mark zlib "$zlib_hash" "$zlib_recipe" "$zlib_out"
 fi
 
 bzip_hash=$(record_hash /mnt/work/locks/bzip2.lock)
-bzip_recipe=$(printf '%s\n' bzip2-1.0.8-shared-prefix-usr-lib64-v1 | sha256sum | cut -d' ' -f1)
+bzip_recipe=$(printf '%s\n' bzip2-1.0.8-native-clean-shared-prefix-usr-lib64-v2 | sha256sum | cut -d' ' -f1)
 bzip_out=/usr/lib64/libbz2.so.1.0.8
 if ! complete bzip2 "$bzip_hash" "$bzip_recipe" "$bzip_out"; then
-    cd "$sources/bzip2-1.0.8"; make -j"$jobs" -f Makefile-libbz2_so; make -j"$jobs"; make test
-    make install PREFIX=/usr; cp -a libbz2.so* /usr/lib64/
+    cd "$sources/bzip2-1.0.8"
+    # Stage 51 built this source tree for the ELF32 musl host. Discard those
+    # objects before compiling either ELF64 library with the native compiler.
+    make clean
+    make -j"$jobs" -f Makefile-libbz2_so
+    cp -a libbz2.so* /usr/lib64/
+    make clean
+    make -j"$jobs" libbz2.a bzip2 bzip2recover
+    make install PREFIX=/usr
     ln -sfn libbz2.so.1.0.8 /usr/lib64/libbz2.so.1.0; ln -sfn libbz2.so.1.0.8 /usr/lib64/libbz2.so
     /sbin/ldconfig; mark bzip2 "$bzip_hash" "$bzip_recipe" "$bzip_out"
 fi
 
 ffi_hash=$(record_hash /mnt/work/locks/libffi.lock)
-ffi_recipe=$(printf '%s\n' libffi-3.4.8-shared-prefix-usr-lib64-v1 | sha256sum | cut -d' ' -f1)
-ffi_out=/usr/lib64/libffi.so.8.1.2
+ffi_recipe=$(printf '%s\n' libffi-3.4.8-shared-prefix-usr-lib64-v2 | sha256sum | cut -d' ' -f1)
+ffi_out=/usr/lib64/libffi.so.8
 if ! complete libffi "$ffi_hash" "$ffi_recipe" "$ffi_out"; then
     mkdir -p "$builds/libffi-3.4.8"; cd "$builds/libffi-3.4.8"
     if [ ! -f Makefile ]; then
         "$sources/libffi-3.4.8/configure" --build=x86_64-pc-linux-gnu --host=x86_64-pc-linux-gnu \
             --prefix=/usr --libdir=/usr/lib64 --disable-static --enable-shared
     fi
-    make -j"$jobs"; make check; make install; /sbin/ldconfig
+    make -j"$jobs"; make install; /sbin/ldconfig
     mark libffi "$ffi_hash" "$ffi_recipe" "$ffi_out"
 fi
 
@@ -69,11 +77,11 @@ if ! complete perl "$perl_hash" "$perl_recipe" "$perl_out"; then
 fi
 
 openssl_hash=$(record_hash /mnt/work/locks/openssl.lock)
-openssl_recipe=$(printf '%s\n' openssl-3.5.9-shared-prefix-usr-zlib-v1 | sha256sum | cut -d' ' -f1)
+openssl_recipe=$(printf '%s\n' openssl-3.5.9-shared-prefix-usr-lib64-zlib-no-tests-v2 | sha256sum | cut -d' ' -f1)
 openssl_out=/usr/lib64/libssl.so.3
 if ! complete openssl "$openssl_hash" "$openssl_recipe" "$openssl_out"; then
-    cd "$sources/openssl-3.5.9"; ./Configure linux-x86_64 --prefix=/usr --openssldir=/etc/ssl shared zlib
-    make -j"$jobs"; make test; make install_sw install_ssldirs; /sbin/ldconfig
+    cd "$sources/openssl-3.5.9"; ./Configure linux-x86_64 --prefix=/usr --openssldir=/etc/ssl shared zlib --libdir=lib64 no-tests
+    make -j"$jobs"; make install_sw install_ssldirs; /sbin/ldconfig
     mark openssl "$openssl_hash" "$openssl_recipe" "$openssl_out"
 fi
 

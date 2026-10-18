@@ -76,7 +76,7 @@ chroot_env() {
         MAKEOPTS="-j$GENTOO_PORTAGE_MAKE_JOBS" PORTAGE_BINHOST= "$@"
 }
 plan_is_empty() {
-    grep -Eq '^Calculating dependencies .*done!' "$1" &&
+    grep -Eq '^Calculating dependencies[ .]*done!' "$1" &&
         ! grep -Eq '^\[(ebuild|binary|blocks|uninstall)|^!!!|^[[:space:]]*\* Error:' "$1"
 }
 native_gentoo_glibc_runtime_version() { chroot_env /usr/bin/ldd --version | awk 'NR==1 {print $NF}'; }
@@ -87,3 +87,10 @@ verify_native_gentoo_glibc() {
     case "$(native_gentoo_glibc_runtime_version)" in 2.44*) ;; *) return 1 ;; esac
 }
 
+
+plan_is_only_installed_reinstalls() {
+    local plan=$1
+    install -m 0755 "$SCRIPT_DIR/probes/reinstall-plan.py" "$NATIVE_ROOT/tmp/reinstall-plan.py" || return 1
+    cp "$plan" "$NATIVE_ROOT/tmp/reinstall-plan.txt" || return 1
+    chroot_env /usr/bin/python3.12 /tmp/reinstall-plan.py /tmp/reinstall-plan.txt
+}
