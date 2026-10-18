@@ -424,11 +424,8 @@ mount --make-rslave "$NATIVE_ROOT/gentoo-scratch"
 mount --bind "$WORK_ROOT" "$NATIVE_ROOT/host-build"
 native_build_bind_mounted=1
 
-if [ -n "${GENTOO_SERIAL_DEVICE:-}" ] && [ "${GENTOO_SERIAL_PARENT_LOGGING:-0}" != 1 ]; then
-    [ -w "$GENTOO_SERIAL_DEVICE" ] || { echo "Serial device is not writable: $GENTOO_SERIAL_DEVICE" >&2; exit 1; }
-    exec > >(tee -a "$LOG" | tee -a "$GENTOO_SERIAL_DEVICE") 2>&1
-else
-    exec > >(tee -a "$LOG") 2>&1
-fi
+# The top-level driver owns the durable log and waits for it to drain. Do not
+# install another asynchronous tee here: the old fragment referenced an unset
+# LOG variable and could lose output or fail in its process-substitution child.
 PHASE=build-source-wget
 trap 'status=$?; printf "\nFAILED phase=%s exit=%s time=%s\n" "$PHASE" "$status" "$(date -u +%FT%TZ)"; exit "$status"' ERR

@@ -17,36 +17,7 @@ run_emerge() {
     portage_manifest_guard_check && portage_repository_guard_check || return 1
     return "$emerge_status"
 }
-plan_is_empty() {
-    # Portage may print only a successful resolution and no zero-package
-    # summary. Require that resolution completed and no action/error rows.
-    grep -Eq '^Calculating dependencies .*done!' "$1" &&
-        ! grep -Eq '^\[(ebuild|binary|blocks|uninstall)|^!!!|^[[:space:]]*\* Error:' "$1"
-}
-plan_is_only_installed_reinstalls() {
-    local plan=$1 line atom category pf reinstalls=0 invalid=0
-    while IFS= read -r line; do
-        case "$line" in
-            '[ebuild   R    ] '*)
-                atom=${line#\[ebuild   R    \] }
-                atom=${atom%%::*}
-                atom=${atom%%:*}
-                atom=${atom%% *}
-                category=${atom%%/*}
-                pf=${atom#*/}
-                if [ -z "$category" ] || [ "$category" = "$atom" ] ||
-                    [ -z "$pf" ] || [ ! -d "$NATIVE_ROOT/var/db/pkg/$category/$pf" ] ||
-                    [[ "$line" == *'*'* ]]; then
-                    invalid=$((invalid + 1))
-                else
-                    reinstalls=$((reinstalls + 1))
-                fi
-                ;;
-            '[ebuild '*'] '*) invalid=$((invalid + 1)) ;;
-        esac
-    done < "$plan"
-    [ "$reinstalls" -gt 0 ] && [ "$invalid" -eq 0 ]
-}
+# Plan acceptance helpers come from lib/native-gentoo-system.sh.
 native_gentoo_glibc_runtime_version() {
     # Python's _ctypes is optional when CPython is configured without libffi.
     # glibc's own ldd reports the linked runtime without that optional module.

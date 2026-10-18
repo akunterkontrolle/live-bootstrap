@@ -1085,3 +1085,11 @@ are backed up before the incremental retry. Generate with
 The earlier `/tmp/portage-integrity-*/fixture.tar.xz` failures are deliberate
 corrupt-source tests; the following strict-digest success message confirms the
 expected rejection.
+
+If stage 70 completed and stage 71 fails with `Failed to validate a sane /dev`
+and a Bash process-substitution error, paste
+[repair-vm-portage-dev.paste.txt](repair-vm-portage-dev.paste.txt), then run the
+same resume command. It mounts the native chroot's virtual filesystems for both
+action and verification, cleans them up on return, and preserves completed
+stage 70. Generate this one-file follow-up with
+`python3 system/gentoo/maintenance/make-audit-repair.py --portage-dev`.

@@ -326,12 +326,9 @@ if [ ! -s "$system_marker" ]; then
         run_emerge --pretend --tree @system | tee "$STATE/native-gentoo-at-system-resume-plan.txt"
         run_emerge --pretend --verbose --color=n @system |
             tee "$STATE/native-gentoo-at-system-resume-remaining.txt"
-        if grep -Fq '>>> Completed (55 of 55)' "$LOG" &&
-            plan_is_only_installed_reinstalls "$STATE/native-gentoo-at-system-resume-remaining.txt"; then
-            echo 'A prior source @system merge completed and Portage reports only exact-version, unchanged-USE reinstalls; resuming without rebuilding those packages.'
-        else
-            run_emerge --newuse --deep @system
-        fi
+        # Resolve the actual current graph; historical log counts are not
+        # transaction receipts and cannot establish that a merge completed.
+        run_emerge --newuse --deep @system
     else
         printf 'starting %s\nGentoo repository commit=%s\nPortage config is source-only\n' \
             "$(date -u +%FT%TZ)" "$REPO_COMMIT" > "$system_started.tmp"

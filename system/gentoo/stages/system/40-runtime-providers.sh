@@ -38,7 +38,7 @@ native_runtime=$(native_gentoo_glibc_runtime_version) &&
     echo 'Native-root glibc does not match the source-locked 2.44 provider.' >&2; exit 1;
 }
 [ -s "$NATIVE_ROOT/usr/lib/perl5/5.42.2/x86_64-linux/CORE/libperl.so" ] &&
-    chroot_env /usr/src/perl-5.42.2/perl -e 'printf "%vd\n", $^V' | grep -Fxq '5.42.2' || {
+    chroot_env /usr/bin/perl -e 'printf "%vd\n", $^V' | grep -Fxq '5.42.2' || {
     echo 'The source-built native Perl 5.42.2 runtime did not execute with its verified shared library.' >&2; exit 1;
 }
 retire_bootstrap_glibc_provider() {

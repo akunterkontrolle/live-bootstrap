@@ -4,6 +4,51 @@
 . "$SCRIPT_DIR/lib/native.sh"
 . "$SCRIPT_DIR/lib/portage.sh"
 
+# Stage 70 removes its mounts. Every Portage entry (including verification of
+# a completed stage) needs a live proc-fd view inside this separate GNU root.
+native_portage_with_devices() (
+    set -Eeuo pipefail
+    local point
+    # EXIT can run after function-local variables have been unwound by errexit.
+    # These names live only in this subshell and remain available to its trap.
+    gentoo_portage_owned=()
+    native_portage_cleanup() {
+        gentoo_portage_status=$?
+        trap - EXIT
+        for ((gentoo_portage_index=${#gentoo_portage_owned[@]}-1; gentoo_portage_index>=0; gentoo_portage_index--)); do
+            if ! gentoo_unmount_tree "${gentoo_portage_owned[gentoo_portage_index]}"; then
+                printf 'gentoo: failed to unmount native Portage path: %s\n' "${gentoo_portage_owned[gentoo_portage_index]}" >&2
+                [ "$gentoo_portage_status" -ne 0 ] || gentoo_portage_status=1
+            fi
+        done
+        exit "$gentoo_portage_status"
+    }
+    [ -d "$NATIVE_ROOT" ] && [ "$NATIVE_ROOT" != / ] || return 1
+    mkdir -p "$NATIVE_ROOT/proc" "$NATIVE_ROOT/sys" "$NATIVE_ROOT/dev" || return 1
+    for point in "$NATIVE_ROOT/proc" "$NATIVE_ROOT/sys" "$NATIVE_ROOT/dev"; do
+        if mountpoint -q "$point"; then
+            printf 'gentoo: unexpected existing native Portage mount: %s\n' "$point" >&2
+            return 1
+        fi
+    done
+    trap native_portage_cleanup EXIT
+    mount -t proc proc "$NATIVE_ROOT/proc" || return 1
+    gentoo_portage_owned+=("$NATIVE_ROOT/proc")
+    mount --rbind /sys "$NATIVE_ROOT/sys" || return 1
+    gentoo_portage_owned+=("$NATIVE_ROOT/sys")
+    mount --make-rslave "$NATIVE_ROOT/sys" || return 1
+    mount --rbind /dev "$NATIVE_ROOT/dev" || return 1
+    gentoo_portage_owned+=("$NATIVE_ROOT/dev")
+    mount --make-rslave "$NATIVE_ROOT/dev" || return 1
+    # Match pinned Portage's sanity test, rather than checking link spelling.
+    chroot "$NATIVE_ROOT" /bin/bash -c \
+        'test -c /dev/null && test -r /proc/self/status && [[ $(< <(echo foo) ) == foo ]]' || {
+        printf 'gentoo: native Portage proc/device process-substitution probe failed\n' >&2
+        return 1
+    }
+    "$@"
+)
+
 native_portage_tree_hash() {
     (
         cd "$1"
@@ -141,5 +186,7 @@ fingerprint=$(gentoo_fingerprint stages/71-native-portage.sh lib/native.sh lib/p
 # Concurrency is operational policy, not a source/build input. Re-render it on
 # every invocation so changed TOML settings apply without invalidating builds.
 native_portage_configure
-gentoo_run_stage 71-native-portage "$fingerprint" native_portage_action native_portage_verify
+native_portage_mounted_action() { native_portage_with_devices native_portage_action; }
+native_portage_mounted_verify() { native_portage_with_devices native_portage_verify; }
+gentoo_run_stage 71-native-portage "$fingerprint" native_portage_mounted_action native_portage_mounted_verify
 printf 'Pinned Gentoo repository and Portage are ready in the native root; no ebuild has run.\n'
