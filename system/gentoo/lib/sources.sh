@@ -32,7 +32,9 @@ gentoo_fetch_source() {
     mkdir -p "$(dirname "$destination")"
     temporary=$(mktemp "${destination}.partial.XXXXXX")
     # The driver lock serializes cache writes. Failed partials are never reused.
-    if ! wget -O "$temporary" -- "$url"; then
+    # The completed live-bootstrap host already provides curl. Wget is built
+    # later inside the native root, so it cannot be a host-side prerequisite.
+    if ! curl --fail --location --retry 3 --output "$temporary" -- "$url"; then
         rm -f "$temporary"
         gentoo_die "source download failed: $url"
     fi

@@ -22,9 +22,10 @@ Hardware identification also needs `blockdev`, `/sys` and persistent
 `/dev/disk/by-id` links. Source builds
 use the original source-built GCC/G++, GMP/MPFR/MPC/zlib static libraries,
 OpenSSL and zlib development headers/libraries for Python's `ssl` and `zlib`
-modules, make, tar/decompressors, wget, Bison, Flex, Perl, Python and autotools. No guest
-TOML parser is used. The preflight compiles/runs host prerequisite probes and
-binds the host compiler, component, header and archive checksums to this run.
+modules, make, tar/decompressors, curl, Bison, Flex, Perl, Python and
+autotools. No guest TOML parser is used. The preflight compiles and runs host
+prerequisite probes and binds the host compiler, component, header and archive
+checksums to this run.
 
 The host owns TOML parsing, execution-mode selection, input copying, VM resources
 and image paths. The guest owns source builds, receipts and the durable handoff.
