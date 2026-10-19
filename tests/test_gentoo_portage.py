@@ -27,7 +27,7 @@ class PortageHostTests(unittest.TestCase):
     def helpers(self):
         return f'''
 WORK_ROOT="$PWD/work"
-SCRIPT_DIR=/hdd/bootstrap/final-merge/live-bootstrap/system/gentoo
+SCRIPT_DIR={shlex.quote(str(GENTOO))}
 SOURCES="$WORK_ROOT/sources"
 GENTOO_PORTAGE_JOBS=2
 GENTOO_PORTAGE_LOAD_AVERAGE=12
@@ -42,7 +42,7 @@ cd {shlex.quote(str(GENTOO))}
 
     def make_repository(self):
         tree = self.directory / 'work/sources' / 'gentoo-5548522e2c2fa10a4c009348e9ba84c44783f47d'
-        (tree / 'profiles/default/linux/amd64/23.0/desktop').mkdir(parents=True)
+        (tree / 'profiles/default/linux/amd64/23.0/split-usr').mkdir(parents=True)
         (tree / 'profiles/repo_name').write_text('gentoo\n')
         (tree / 'cat/pkg').mkdir(parents=True)
         (tree / 'cat/pkg/Manifest').write_text('DIST example 4 SHA512 abcd\n')
@@ -115,7 +115,7 @@ portage_host_environment
         self.assertIn('MAKEOPTS="-j7"', text)
         self.assertIn(f'DISTDIR="{self.directory}/work/distfiles"', text)
         profile = self.directory / 'work/portage-host-config/etc/portage/make.profile'
-        self.assertEqual(profile.resolve(), tree / 'profiles/default/linux/amd64/23.0/desktop')
+        self.assertEqual(profile.resolve(), tree / 'profiles/default/linux/amd64/23.0/split-usr')
         self.shell('''
 portage_render_config
 portage_host_environment
@@ -146,9 +146,9 @@ chmod +x "$HOST_PREFIX/bin/python3.12"
 portage_emerge --pretend @world
 ''')
         args = (self.directory / 'work/args').read_text()
-        self.assertIn('--usepkg=n --getbinpkg=n --buildpkg=n', args)
+        self.assertIn(str(GENTOO / 'source-only-emerge.py'), args)
+        self.assertTrue(args.rstrip().endswith('/bin/emerge --pretend @world'))
         self.assertIn('strict', (self.directory / 'work/env').read_text())
-        self.shell('portage_emerge --usepkg=y @world', success=False)
         (self.directory / 'work/sources/gentoo-5548522e2c2fa10a4c009348e9ba84c44783f47d/cat/pkg/Manifest').write_text('DIST example 4 SHA512 abcd\n')
         self.shell('portage_emerge --pretend mutate', success=False)
 
@@ -188,7 +188,7 @@ portage_emerge --pretend @world
         stages = [line.split('/stages/', 1)[1].split('"', 1)[0]
                   for line in driver.splitlines() if '/stages/' in line and '. ' in line]
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual(stages[-11:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh', '63-native-tool-floor.sh', '70-native-runtimes.sh', '71-native-portage.sh', '80-native-gentoo-system.sh', '90-native-base-runtime.sh'])
+        self.assertEqual(stages[-12:], ['50-gentoo-sources.sh', '51-host-python.sh', '52-portage-host.sh', '60-native-root.sh', '61-native-shell-tools.sh', '62-native-compiler.sh', '63-native-tool-floor.sh', '70-native-runtimes.sh', '71-native-portage.sh', '72-native-cpu-policy.sh', '80-native-gentoo-system.sh', '90-native-base-runtime.sh'])
         prepare = (GENTOO / 'prepare.py').read_text()
         for name in ('lib/portage.sh', 'lib/manifests.sh', 'lib/portage-host.sh', 'lib/python.sh', 'probes/portage-integrity.py', 'sources/gentoo-repository.lock',
                      'sources/python.lock', 'sources/bzip2.lock', 'sources/portage.lock',

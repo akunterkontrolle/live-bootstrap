@@ -13,6 +13,14 @@ kernel_make() {
         KBUILD_BUILD_USER=live-bootstrap KBUILD_BUILD_HOST=gentoo-continuation "$@"
 }
 
+kernel_check_compiler() {
+    # Kconfig also checks cc-option; exercise the selected compiler explicitly
+    # before the long kernel build. No native CPU flags are passed to Kbuild.
+    printf 'int probe(void) { volatile char a[32]; a[0]=0; return a[0]; }\n' |
+        "$PREFIX/bin/$TARGET-gcc" -O2 -m64 -march=x86-64 -mtune=generic \
+            -fstack-protector-strong -Werror -x c -c -o "$KERNEL_BUILD/hardening-probe.o" -
+}
+
 kernel_check_config() {
     local configuration=$1 required
     while IFS= read -r required; do
@@ -24,6 +32,7 @@ kernel_check_config() {
                 } ;;
         esac
     done < "$KERNEL_FRAGMENT"
+
 }
 
 kernel_check_image() {

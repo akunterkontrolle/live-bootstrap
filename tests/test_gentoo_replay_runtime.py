@@ -689,6 +689,8 @@ class PreparePolicyTests(unittest.TestCase):
         self.native = self.directory / 'native'
         self.tree = self.directory / 'repository'
         self.state = self.directory / 'state'
+        self.state.mkdir()
+        (self.state / 'native-cpu-policy.json').write_text('{"cpu_flags_x86": ["sse2"], "cflags": "-O2 -pipe -march=native -mtune=native -fstack-protector-strong -D_FORTIFY_SOURCE=2"}\n')
         self.ca = self.directory / 'ca.crt'
         self.ca.write_text('certificate-data fixture\n')
         for path in (self.native / 'usr/bin', self.native / 'etc/portage',
@@ -725,6 +727,7 @@ JOBS=3
 PACKAGE_JOBS=2
 LOAD_AVERAGE=4
 GENTOO_PORTAGE_MAKE_JOBS=3
+. "$SCRIPT_DIR/lib/repository-policy.sh"
 sha256() {{ sha256sum < "$1" | cut -d' ' -f1; }}
 marker_driver_recorded() {{ grep -Fxq "driver sha256=$driver_hash" "$1"; }}
 chroot() {{ printf 'bindist\\n'; }}

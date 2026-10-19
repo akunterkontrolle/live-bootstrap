@@ -45,6 +45,8 @@ class NativeResumeTests(unittest.TestCase):
             identity = self.identity('stages/' + stage + '.sh')
             for suffix in ('inputs', 'done'):
                 (self.work / 'state' / (stage + '.' + suffix)).write_text(identity + '\n')
+        (self.work / 'state/native-cpu-policy.json').write_text('{}\n')
+        (self.work / 'state/72-native-cpu-policy.done').write_text('b' * 64 + '\n')
         self.owner = self.identity('stages/80-native-gentoo-system.sh')
         (self.work / 'state/80-native-gentoo-system.inputs').write_text(self.owner + '\n')
         (self.work / 'state/native-gentoo-multilib-profile-enabled.done').write_text('old recipe driver marker\n')
@@ -149,8 +151,14 @@ class NativeVerifierTests(unittest.TestCase):
             recipe = (GENTOO / 'stages/80-native-gentoo-system.sh').read_text()
             verifier = 'native_gentoo_system_verify() {' + recipe.split(
                 'native_gentoo_system_verify() {', 1)[1].split('\nnative_system_fingerprint=', 1)[0]
+            for source, destination in (
+                    ('source-only-emerge.py', 'usr/local/libexec/gentoo-continuation/source-only-emerge.py'),
+                    ('source-only-emerge.sh', 'usr/local/sbin/emerge')):
+                target = native / destination
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(GENTOO / source, target)
             body = ('set -Eeuo pipefail\nWORK_ROOT=' + shlex.quote(str(work)) + '\n'
-                    'GENTOO_REPO_COMMIT=pinned\nNATIVE_ROOT=/wrong-inherited-root\n'
+                    'GENTOO_REPO_COMMIT=pinned\nNATIVE_ROOT=/wrong-inherited-root\nSCRIPT_DIR=' + shlex.quote(str(GENTOO)) + '\n'
                     'chroot() {\n'
                     '  [ "$1" = "$WORK_ROOT/native-root-x86_64" ] || return 8\n'
                     '  [ "$2" = /bin/bash ] && [ "$3" = --noprofile ] && [ "$4" = --norc ] && [ "$5" = -c ] || return 9\n'

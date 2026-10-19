@@ -103,7 +103,7 @@ CHOST="x86_64-pc-linux-gnu"
 ARCH="amd64"
 ACCEPT_KEYWORDS="amd64"
 ACCEPT_LICENSE="*"
-CFLAGS="-O2 -pipe -march=x86-64 -mtune=generic -fstack-protector-strong -D_FORTIFY_SOURCE=2"
+CFLAGS="-O2 -pipe -march=native -mtune=native -fstack-protector-strong -D_FORTIFY_SOURCE=2"
 CXXFLAGS="\${CFLAGS}"
 DISTDIR="/var/cache/distfiles"
 FEATURES="-test -getbinpkg -buildpkg -assume-digests -digest strict"
@@ -114,7 +114,7 @@ PORTAGE_BZIP2_COMMAND="/usr/bin/bzip2"
 GENTOO_MIRRORS="https://distfiles.gentoo.org"
 EOF_MAKE
     chmod 0644 "$temporary"; mv "$temporary" "$portage_root/make.conf"
-    ln -sfn /usr/portage/profiles/default/linux/amd64/23.0/split-usr/no-multilib "$portage_root/make.profile"
+    ln -sfn /usr/portage/profiles/$GENTOO_BASE_PROFILE "$portage_root/make.profile"
 }
 native_portage_action() {
     local repo_hash portage_hash repository="$NATIVE_ROOT/usr/portage" portage_dir="$NATIVE_ROOT/usr/lib/portage"
@@ -135,7 +135,7 @@ native_portage_action() {
     ln -sfn ../lib/portage/bin/ebuild "$NATIVE_ROOT/usr/bin/ebuild"
     ln -sfn ../lib/portage/bin/env-update "$NATIVE_ROOT/usr/bin/env-update"
     [ "$(readlink "$NATIVE_ROOT/etc/portage/make.profile")" = \
-        /usr/portage/profiles/default/linux/amd64/23.0/split-usr/no-multilib ] || gentoo_die 'seed profile link mismatch'
+        /usr/portage/profiles/$GENTOO_BASE_PROFILE ] || gentoo_die 'seed profile link mismatch'
     chroot "$NATIVE_ROOT" /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin LANG=C LC_ALL=C \
         PYTHONPATH=/usr/lib/portage/lib /usr/bin/python3.12 /usr/lib/portage/bin/emerge --version |
         tee "$WORK_ROOT/state/71-native-emerge-version.txt"
@@ -156,7 +156,7 @@ native_portage_verify() {
     [ "$(readlink "$NATIVE_ROOT/usr/bin/emerge")" = ../lib/portage/bin/emerge ] || return 1
     [ "$(readlink "$NATIVE_ROOT/usr/bin/portageq")" = ../lib/portage/bin/portageq ] || return 1
     [ "$(readlink "$NATIVE_ROOT/etc/portage/make.profile")" = \
-        /usr/portage/profiles/default/linux/amd64/23.0/split-usr/no-multilib ] || return 1
+        /usr/portage/profiles/$GENTOO_BASE_PROFILE ] || return 1
     expected_repo=$(sed -n 's/^repository tree sha256=//p' "$WORK_ROOT/state/71-native-portage-trees.receipt" 2>/dev/null)
     expected_portage=$(sed -n 's/^portage tree sha256=//p' "$WORK_ROOT/state/71-native-portage-trees.receipt" 2>/dev/null)
     [ -n "$expected_repo" ] && [ -n "$expected_portage" ] || return 1
@@ -180,7 +180,7 @@ native_portage_verify() {
     portage_repository_guard_check || return 1
 }
 fingerprint=$(gentoo_fingerprint stages/71-native-portage.sh lib/native.sh lib/portage.sh \
-    lib/portage-host.sh lib/manifests.sh lib/sources.sh \
+    lib/portage-host.sh lib/manifests.sh lib/repository-policy.sh lib/sources.sh \
     probes/portage-version.py sources/portage.lock sources/gentoo-repository.lock \
     "$WORK_ROOT/state/70-native-runtimes.done" "$WORK_ROOT/state/50-gentoo-sources.done")
 # Concurrency is operational policy, not a source/build input. Re-render it on

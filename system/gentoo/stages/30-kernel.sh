@@ -7,6 +7,7 @@ gentoo_fetch_source "$signature_url" "$signature_digest" "$WORK_ROOT/distfiles/$
 . "$SCRIPT_DIR/lib/kernel.sh"
 kernel_action() {
     mkdir -p "$KERNEL_BUILD" "$KERNEL_ARTIFACTS"
+    kernel_check_compiler
     kernel_make x86_64_defconfig
     (cd "$KERNEL_BUILD" && "$LINUX_SOURCE/scripts/kconfig/merge_config.sh" -m .config "$KERNEL_FRAGMENT")
     # Always resolve new symbols noninteractively, including after clock skew.

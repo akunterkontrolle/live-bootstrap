@@ -13,6 +13,10 @@ from lib.gentoo_config import load, render, root_image_gib
 
 # Extend this list in the batch that adds each runtime artifact.
 BUNDLE_FILES = (
+    'bootstrap-resume.sh', 'lib/handoff.sh', 'lib/hardware-discovery.sh',
+    'source-only-emerge.py', 'source-only-emerge.sh', 'cpu-policy.py', 'lib/cpu-policy.sh',
+    'lib/repository-policy.sh', 'stages/72-native-cpu-policy.sh', 'sources/cpuid2cpuflags.lock',
+    'policy/00-cpu-flags.accept_keywords',
     'lib/perl-locale.sh', 'lib/shutdown.sh',
     'lib/installer-filesystems.sh', 'retire-bootstrap-nscd.py',
     'gentoo.sh', 'console-session.py', 'bootstrap-network.py', 'install-base.sh', 'lib/common.sh', 'lib/devices.sh', 'lib/storage.sh', 'lib/state.sh',
@@ -70,8 +74,7 @@ BUNDLE_FILES = (
     'stages/system/70-system.sh', 'stages/system/80-verify.sh',
     'build-bootstrap-scanelf.sh', 'audit-resolved-sources.py', 'probes/reinstall-plan.py',
     'probes/portage-mount-shim.py', 'probes/native-permissions.py',
-    'sources/native-xz-5.8.3.lock', 'sources/native-tar-1.35.lock',
-    'sources/native-gawk-5.4.1.lock', 'sources/wget.lock',
+    'sources/wget.lock',
     'sources/zlib.lock', 'sources/openssl.lock',
     'sources/libffi.lock', 'sources/perl.lock',
     'policy/defaults/base-packages.list', 'policy/defaults/base-package.use',

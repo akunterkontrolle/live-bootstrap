@@ -19,6 +19,6 @@ portage_sources_verify() {
     portage_manifest_guard_check || return 1
     portage_repository_guard_check
 }
-fingerprint=$(gentoo_fingerprint stages/50-gentoo-sources.sh lib/manifests.sh lib/sources.sh \
+fingerprint=$(gentoo_fingerprint stages/50-gentoo-sources.sh lib/manifests.sh lib/repository-policy.sh lib/sources.sh \
     sources/gentoo-repository.lock "$WORK_ROOT/state/43-runtime-acceptance.done")
 gentoo_run_stage 50-gentoo-sources "$fingerprint" portage_sources_action portage_sources_verify

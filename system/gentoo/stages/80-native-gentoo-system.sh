@@ -56,8 +56,7 @@ native_gentoo_system_action() (
     run_emerge() {
         local status=0
         portage_manifest_guard_check && portage_repository_guard_check || gentoo_die 'pinned Gentoo source guard failed before emerge'
-        chroot_env /usr/bin/python3.12 /usr/lib/portage/bin/emerge \
-            --usepkg=n --getbinpkg=n --buildpkg=n "$@" || status=$?
+        chroot_env /usr/local/sbin/emerge "$@" || status=$?
         portage_manifest_guard_check && portage_repository_guard_check || gentoo_die 'pinned Gentoo source guard failed after emerge'
         return "$status"
     }
@@ -127,6 +126,8 @@ native_gentoo_system_verify() {
     local state_dir="$WORK_ROOT/state"
     local NATIVE_ROOT="$WORK_ROOT/native-root-x86_64"
     local receipt="$WORK_ROOT/state/native-gentoo-system-ready.receipt"
+    cmp -s "$SCRIPT_DIR/source-only-emerge.py" "$NATIVE_ROOT/usr/local/libexec/gentoo-continuation/source-only-emerge.py" &&
+        cmp -s "$SCRIPT_DIR/source-only-emerge.sh" "$NATIVE_ROOT/usr/local/sbin/emerge" || return 1
     [ -s "$receipt" ] && grep -Fxq "Gentoo repository commit=$GENTOO_REPO_COMMIT" "$receipt" &&
         [ -s "$state_dir/native-gentoo-at-system-source-built.done" ] &&
         [ -s "$state_dir/native-gentoo-multilib-gcc-full.done" ] &&
@@ -155,7 +156,8 @@ native_system_fingerprint=$(gentoo_fingerprint \
     stages/system/50-elf-and-compiler.sh stages/system/60-gentoo-bootstrap.sh \
     stages/system/70-system.sh stages/system/80-verify.sh retire-bootstrap-nscd.py \
     build-bootstrap-scanelf.sh audit-resolved-sources.py probes/reinstall-plan.py \
-    probes/portage-mount-shim.py \
+    probes/portage-mount-shim.py source-only-emerge.py source-only-emerge.sh cpu-policy.py lib/repository-policy.sh \
+    "$WORK_ROOT/state/native-cpu-policy.json" "$WORK_ROOT/state/72-native-cpu-policy.done" \
     sources/native-xz-5.8.3.lock sources/native-tar-1.35.lock sources/native-gawk-5.4.1.lock \
     sources/wget.lock sources/glibc.lock sources/perl.lock config.inputs.sh \
     "$WORK_ROOT/state/71-native-portage.done" "$WORK_ROOT/state/70-native-runtimes.done" \

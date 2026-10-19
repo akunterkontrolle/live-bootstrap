@@ -2,7 +2,7 @@
 # Sourced by stages/80-native-gentoo-system.sh; shares its checked state.
 chroot_env() {
     chroot "$NATIVE_ROOT" /usr/bin/env -i \
-        HOME=/root TERM="${TERM:-vt100}" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        HOME=/root TERM="${TERM:-vt100}" PATH=/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
         LANG=C LC_ALL=C PYTHONPATH=/usr/lib/portage/lib \
         LD_LIBRARY_PATH=/usr/lib/perl5/5.42.2/x86_64-linux/CORE \
         EMERGE_DEFAULT_OPTS="--jobs=$PACKAGE_JOBS --load-average=$LOAD_AVERAGE --usepkg=n --getbinpkg=n --buildpkg=n" \
@@ -12,8 +12,8 @@ portage_manifest_guard_check
 portage_repository_guard_check
 run_emerge() {
     local emerge_status=0
-    chroot_env /usr/bin/python3.12 /usr/lib/portage/bin/emerge \
-        --usepkg=n --getbinpkg=n --buildpkg=n "$@" || emerge_status=$?
+    portage_manifest_guard_check && portage_repository_guard_check || return 1
+    chroot_env /usr/local/sbin/emerge "$@" || emerge_status=$?
     portage_manifest_guard_check && portage_repository_guard_check || return 1
     return "$emerge_status"
 }
@@ -37,7 +37,7 @@ verify_native_gentoo_glibc() {
 run_gentoo_bootstrap() {
     local bootstrap_status=0
     chroot "$NATIVE_ROOT" /usr/bin/env -i \
-        HOME=/root TERM="${TERM:-vt100}" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        HOME=/root TERM="${TERM:-vt100}" PATH=/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
         LANG=C LC_ALL=C PYTHONPATH=/usr/lib/portage/lib USE=-test \
         LD_LIBRARY_PATH=/usr/lib/perl5/5.42.2/x86_64-linux/CORE \
         myLIBC=sys-libs/glibc \

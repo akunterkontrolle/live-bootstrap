@@ -90,7 +90,7 @@ base_runtime_action() (
     run_emerge() {
         local status=0
         portage_manifest_guard_check && portage_repository_guard_check || gentoo_die 'pinned Gentoo source guard failed before emerge'
-        chroot_env /usr/bin/python3.12 /usr/lib/portage/bin/emerge --usepkg=n --getbinpkg=n --buildpkg=n "$@" || status=$?
+        chroot_env /usr/local/sbin/emerge "$@" || status=$?
         portage_manifest_guard_check && portage_repository_guard_check || gentoo_die 'pinned Gentoo source guard failed after emerge'
         return "$status"
     }
@@ -179,7 +179,7 @@ base_runtime_verify() (
 )
 
 base_runtime_fingerprint=$(gentoo_fingerprint stages/90-native-base-runtime.sh \
-    lib/perl-locale.sh \
+    lib/perl-locale.sh source-only-emerge.py source-only-emerge.sh cpu-policy.py lib/repository-policy.sh \
     lib/native-gentoo-system.sh lib/manifests.sh lib/mounts.sh \
     "$BASE_PACKAGES_INPUT" "$BASE_USE_INPUT" "$BASE_LICENSE_INPUT" "$BASE_KEYWORDS_INPUT" \
     "$FIRMWARE_INPUT" policy/90-encrypted-base-dracut.conf \

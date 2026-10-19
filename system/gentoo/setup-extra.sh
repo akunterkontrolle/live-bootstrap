@@ -12,6 +12,9 @@ case "$MODE" in --plan|plan) MODE=plan ;; --migrate|migrate) MODE=migrate ;;
     --discard-migration|discard-migration) MODE=discard-migration ;;
     *) echo 'Usage: ms1504-extra {plan|migrate --source MOUNT|initialize --source MOUNT|resume|restore|verify|discard-migration}' >&2; exit 2 ;; esac
 
+. "$(dirname -- "$(readlink -f "$0")")/lib/devices.sh"
+gentoo_die() { fail "$@"; }
+
 fail() { printf 'ms1504-extra: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"; }
 for command in awk blkid blockdev chmod chown cryptsetup date dd df du find findmnt flock grep id install lsblk lvs mkdir mkfs.ext4 mount mountpoint mv rc-service rc-update readlink rm rsync sed sha256sum sgdisk sort stat sync tail tr udevadm umount wc xargs; do need "$command"; done
@@ -110,11 +113,11 @@ resolve_devices() {
     ROOT_DISK=$(readlink -f "$root_disks")
     [[ $(disk_serial "$ROOT_DISK") == "$ROOT_SERIAL" && $(lsblk -bndro SIZE "$ROOT_DISK" | tr -d '[:space:]') == "$ROOT_BYTES" ]] || fail 'running root disk differs from its installed identity receipt.'
     if [[ $ROOT_PROFILE == hardware ]]; then
-        [[ $(readlink -f "$ROOT_BY_ID") == "$ROOT_DISK" ]] || fail 'running root disk no longer resolves to its installed by-id path.'
-        [[ $(lsblk -dnro WWN "$ROOT_DISK" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//') == "$ROOT_WWN" ]] || fail 'running root WWN differs from its installed identity receipt.'
-        [[ $(lsblk -dnro MODEL "$ROOT_DISK" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') == "$ROOT_MODEL" ]] || fail 'running root model differs from its installed identity receipt.'
+        [[ $(gentoo_resolve_hardware_disk "$ROOT_BY_ID" "$ROOT_SERIAL" "$ROOT_BYTES" "$ROOT_BYTES" "$ROOT_WWN" "$ROOT_MODEL") == "$ROOT_DISK" ]] || fail 'running root disk no longer resolves to its installed by-id path.'
+        [[ $(gentoo_disk_attribute WWN "$ROOT_DISK" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//') == "$ROOT_WWN" ]] || fail 'running root WWN differs from its installed identity receipt.'
+        [[ $(gentoo_disk_attribute MODEL "$ROOT_DISK" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') == "$ROOT_MODEL" ]] || fail 'running root model differs from its installed identity receipt.'
     fi
-    if [[ $PROFILE == hardware ]]; then EXTRA_DISK=$EXTRA_BY_ID; else EXTRA_DISK=$(find_by_serial); fi
+    if [[ $PROFILE == hardware ]]; then EXTRA_DISK=$(gentoo_resolve_hardware_disk "$EXTRA_BY_ID" "$EXTRA_SERIAL" "$EXTRA_BYTES" "$EXTRA_BYTES" "$EXTRA_WWN" "$EXTRA_MODEL"); else EXTRA_DISK=$(find_by_serial); fi
     [[ -b $EXTRA_DISK && $(lsblk -dnro TYPE "$EXTRA_DISK" | tr -d '[:space:]') == disk ]] || fail 'extra identity is not a whole block disk.'
     EXTRA_REAL=$(readlink -f "$EXTRA_DISK")
     [[ $EXTRA_REAL != "$ROOT_DISK" ]] || fail 'extra disk is the encrypted root disk.'
@@ -122,9 +125,9 @@ resolve_devices() {
     size=$(lsblk -bndro SIZE "$EXTRA_REAL" | tr -d '[:space:]')
     [[ $size == "$EXTRA_BYTES" ]] || fail 'extra disk capacity differs from its installed identity receipt.'
     if [[ $PROFILE == hardware ]]; then
-        [[ $(lsblk -dnro WWN "$EXTRA_REAL" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//') == "$EXTRA_WWN" ]] || fail 'extra disk WWN mismatch.'
-        [[ $(lsblk -dnro MODEL "$EXTRA_REAL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') == "$EXTRA_MODEL" ]] || fail 'extra disk model mismatch.'
-        [[ $(readlink -f "$EXTRA_BY_ID") == "$EXTRA_REAL" ]] || fail 'configured extra by-id path changed.'
+        [[ $(gentoo_disk_attribute WWN "$EXTRA_REAL" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//') == "$EXTRA_WWN" ]] || fail 'extra disk WWN mismatch.'
+        [[ $(gentoo_disk_attribute MODEL "$EXTRA_REAL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') == "$EXTRA_MODEL" ]] || fail 'extra disk model mismatch.'
+        [[ $(gentoo_resolve_hardware_disk "$EXTRA_BY_ID" "$EXTRA_SERIAL" "$EXTRA_BYTES" "$EXTRA_BYTES" "$EXTRA_WWN" "$EXTRA_MODEL") == "$EXTRA_REAL" ]] || fail 'configured extra by-id path changed.'
     fi
     EXTRA_PART=${EXTRA_REAL}1
     case "$EXTRA_REAL" in *[0-9]) EXTRA_PART=${EXTRA_REAL}p1 ;; esac

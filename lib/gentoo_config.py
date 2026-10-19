@@ -67,6 +67,9 @@ def load(path, mode):
             raise ValueError(f'{role}_by_id must name a whole disk')
         if mode == 'hardware' and (not by_id or not serial.strip()):
             raise ValueError(f'hardware requires {role}_by_id and {role}_serial')
+        if mode == 'hardware' and role in ('root', 'extra'):
+            if not disks[role + '_model'].strip() or not re.fullmatch(r'(?:0[xX])?[0-9a-fA-F]{16,32}', disks[role + '_wwn']):
+                raise ValueError(f'hardware requires {role}_model and a hexadecimal {role}_wwn')
     if mode == 'hardware':
         for suffix in ('by_id', 'serial'):
             if len({disks[role + '_' + suffix] for role in ('root', 'boot', 'extra')}) != 3:

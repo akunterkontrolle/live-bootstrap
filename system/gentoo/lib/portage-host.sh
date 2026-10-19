@@ -5,8 +5,8 @@ portage_render_config() {
     [[ "$jobs" =~ ^[1-9][0-9]*$ && "$make_jobs" =~ ^[1-9][0-9]*$ &&
         "$load" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]] &&
         awk -v value="$load" 'BEGIN {exit !(value > 0)}' || gentoo_die 'invalid Portage concurrency settings'
-    [ -d "$GENTOO_REPO_TREE/profiles/default/linux/amd64/23.0/desktop" ] ||
-        gentoo_die 'pinned Gentoo snapshot lacks the reviewed amd64 desktop profile'
+    [ -d "$GENTOO_REPO_TREE/profiles/$GENTOO_BASE_PROFILE" ] ||
+        gentoo_die 'pinned Gentoo snapshot lacks the reviewed amd64 base profile'
     local directory="$PORTAGE_CONFIG/etc/portage"
     mkdir -p "$directory/repos.conf"
     local temporary
@@ -20,7 +20,7 @@ location = $GENTOO_REPO_TREE
 EOF_CONF
     chmod 0644 "$temporary"
     mv "$temporary" "$directory/repos.conf/gentoo.conf"
-    ln -sfn "$GENTOO_REPO_TREE/profiles/default/linux/amd64/23.0/desktop" "$directory/make.profile"
+    ln -sfn "$GENTOO_REPO_TREE/profiles/$GENTOO_BASE_PROFILE" "$directory/make.profile"
     temporary=$(mktemp "$directory/.make-conf.XXXXXX")
     cat > "$temporary" <<EOF_CONF
 CHOST="x86_64-pc-linux-gnu"
@@ -29,6 +29,7 @@ FEATURES="-test -getbinpkg -buildpkg -assume-digests -digest strict"
 EMERGE_DEFAULT_OPTS="--jobs=$jobs --load-average=$load --usepkg=n --getbinpkg=n --buildpkg=n"
 MAKEOPTS="-j$make_jobs"
 PORTAGE_BINHOST=""
+PKGDIR="$WORK_ROOT/binpkgs"
 EOF_CONF
     chmod 0644 "$temporary"
     mv "$temporary" "$directory/make.conf"
@@ -105,16 +106,13 @@ portage_emerge() {
     portage_manifest_guard_check || gentoo_die 'refusing Portage operation with changed repository Manifests'
     for argument in "$@"; do
         case "$argument" in
-            --usepkg|--usepkg=*|--usepkg-yes|--usepkgonly|--getbinpkg|--getbinpkg=*|--getbinpkg-yes|--getbinpkgonly|--buildpkg|--buildpkg=*|--buildpkg-yes|--buildpkgonly|-k|-g|-b|-B)
-                gentoo_die "source-only Portage forbids $argument" ;;
             --jobs|--jobs=*|--load-average|--load-average=*|-j|-j[0-9]*|-j[0-9]*.*)
                 gentoo_die "Portage concurrency comes from the reviewed TOML settings, not $argument" ;;
         esac
     done
     if (
         portage_host_environment
-        "$HOST_PREFIX/bin/python3.12" "$PORTAGE_SOURCE/bin/emerge" \
-            --usepkg=n --getbinpkg=n --buildpkg=n "$@"
+        "$HOST_PREFIX/bin/python3.12" "$SCRIPT_DIR/source-only-emerge.py" "$PORTAGE_SOURCE/bin/emerge" "$@"
     ); then
         result=0
     else

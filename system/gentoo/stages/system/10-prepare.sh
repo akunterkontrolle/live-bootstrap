@@ -6,6 +6,11 @@ mkdir -p "$STATE" "$DISTFILES" "$NATIVE_ROOT/usr/src" "$NATIVE_ROOT/usr/src/arch
     "$NATIVE_ROOT/var/log/portage" \
     "$SCRATCH/portage-tmp" "$SCRATCH/distfiles" "$SCRATCH/binpkgs"
 
+# All emerge callers, including the upstream bootstrap shell, share the guard.
+install -d -m 0755 "$NATIVE_ROOT/usr/local/sbin" "$NATIVE_ROOT/usr/local/libexec/gentoo-continuation"
+install -m 0644 "$SCRIPT_DIR/source-only-emerge.py" "$NATIVE_ROOT/usr/local/libexec/gentoo-continuation/source-only-emerge.py"
+install -m 0755 "$SCRIPT_DIR/source-only-emerge.sh" "$NATIVE_ROOT/usr/local/sbin/emerge"
+
 # Portage's sandbox setup calls `mount --make-slave /proc` before the first
 # package can provide util-linux. Supply only the mount-propagation operations
 # during this bootstrap window; the helper delegates to Gentoo mount as soon
@@ -103,7 +108,7 @@ fi
 bootstrap_progress_file="$NATIVE_ROOT/var/run/bootstrap-progress"
 multilib_system_marker="$STATE/native-gentoo-at-system-multilib.done"
 multilib_profile_marker="$STATE/native-gentoo-multilib-profile-enabled.done"
-gentoo_profile_path=/usr/portage/profiles/default/linux/amd64/23.0/split-usr
+gentoo_profile_path=/usr/portage/profiles/$GENTOO_BASE_PROFILE
 [ -d "$NATIVE_ROOT$gentoo_profile_path" ] || {
     echo "Pinned Gentoo multilib profile is missing: $gentoo_profile_path" >&2; exit 1;
 }
@@ -139,7 +144,7 @@ fi
 # Select Gentoo's multilib profile before its bootstrap and first @system pass.
 current_profile=$(readlink "$NATIVE_ROOT/etc/portage/make.profile" 2>/dev/null || true)
 case "$current_profile" in
-    ''|/usr/portage/profiles/default/linux/amd64/23.0/split-usr/no-multilib|"$gentoo_profile_path") ;;
+    ''|"$gentoo_profile_path") ;;
     *) echo "Unexpected Gentoo profile before the first package merge: $current_profile" >&2; exit 1 ;;
 esac
 ln -sfn "$gentoo_profile_path" "$NATIVE_ROOT/etc/portage/make.profile"
@@ -200,19 +205,29 @@ else
     # Keep both ABIs explicit so stage 3 cannot remove an already required
     # abi_x86_32 from virtual/zlib and other multilib prerequisites.
     bootstrap_profile_use=$(printf '%s\n' "$bootstrap_profile_use" | awk '{for(i=1;i<=NF;i++) if($i!="zstd" && $i!="python_targets_python3_14" && $i!="python_single_target_python3_14" && $i!~/^-?abi_x86_/) printf "%s%s", (n++?" ":""), $i; print ""}')
-    bootstrap_use_conf_value="$bootstrap_profile_use -zstd -python_targets_python3_14 python_targets_python3_12 -python_single_target_python3_14 python_single_target_python3_12 -gawk mawk reference gnu bash bison flex abi_x86_64 abi_x86_32"
+    cpu_bootstrap_use=$(python3 - "$STATE/native-cpu-policy.json" <<'CPU_USE'
+import json, sys
+print(' '.join('cpu_flags_x86_' + flag for flag in json.load(open(sys.argv[1]))['cpu_flags_x86']))
+CPU_USE
+)
+    bootstrap_use_conf_value="$cpu_bootstrap_use $bootstrap_profile_use -zstd -python_targets_python3_14 python_targets_python3_12 -python_single_target_python3_14 python_single_target_python3_12 -gawk mawk reference gnu bash bison flex abi_x86_64 abi_x86_32"
     case "$bootstrap_use_conf_value" in *[!a-zA-Z0-9_+\ -]*)
         echo 'Pinned bootstrap USE value contains unexpected characters.' >&2; exit 1 ;;
     esac
     bootstrap_use_conf_line="BOOTSTRAP_USE=\"$bootstrap_use_conf_value\""
 fi
+native_cpu_cflags=$(python3 - "$STATE/native-cpu-policy.json" <<'CPU_CFLAGS'
+import json, sys
+print(json.load(open(sys.argv[1]))['cflags'])
+CPU_CFLAGS
+)
 cat > "$NATIVE_ROOT/etc/portage/make.conf" <<EOF
 CHOST="x86_64-pc-linux-gnu"
 ARCH="amd64"
 ACCEPT_KEYWORDS="amd64"
 ACCEPT_LICENSE="*"
 ABI_X86="64${bootstrap_abi_x86}"
-CFLAGS="-O2 -pipe -march=x86-64 -mtune=generic -fstack-protector-strong -D_FORTIFY_SOURCE=2"
+CFLAGS="$native_cpu_cflags"
 CXXFLAGS="\${CFLAGS}"
 USE="-test${bootstrap_nls_flag}"
 ${bootstrap_use_conf_line}

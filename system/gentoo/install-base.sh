@@ -8,6 +8,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
 . "$SCRIPT_DIR/lib/state.sh"
 . "$SCRIPT_DIR/lib/devices.sh"
 . "$SCRIPT_DIR/lib/storage.sh"
+. "$SCRIPT_DIR/lib/repository-policy.sh"
 . "$SCRIPT_DIR/lib/mounts.sh"
 . "$SCRIPT_DIR/lib/bootstrap-tools.sh"
 . "$SCRIPT_DIR/lib/installer-filesystems.sh"
@@ -19,6 +20,8 @@ case "$-" in *x*) gentoo_die 'disable shell tracing before using the installer' 
 gentoo_mount_workspace
 WORK_ROOT=/build/gentoo-bootstrap
 NATIVE_ROOT="$WORK_ROOT/native-root-x86_64"
+. "$SCRIPT_DIR/lib/cpu-policy.sh"
+gentoo_verify_recorded_cpu
 export PATH="$WORK_ROOT/host-tools/bin:${PATH:-/usr/bin:/bin}:/usr/sbin:/sbin"
 STATE="$WORK_ROOT/install-base-state"
 VG=$GENTOO_SYSTEM_VOLUME_GROUP
@@ -67,14 +70,22 @@ find_serial_disk() {
     done < <(lsblk -dnpo NAME,TYPE)
     [ "$count" -eq 1 ] || fail "expected exactly one disk with serial $wanted."
 }
+installer_disk_attribute() {
+    local value
+    value=$(gentoo_disk_attribute "$@") || {
+        [ "$GENTOO_MODE" = vm ] || fail "cannot observe hardware disk $1"
+        value= # Synthetic VM disks need not expose optional model/WWN data.
+    }
+    printf '%s\n' "$value"
+}
 check_disk() {
     local path=$1 expected=$2 minimum=$3 maximum=$4 expected_wwn=$5 expected_model=$6
     local real serial bytes value
     [ -b "$path" ] && [ "$(lsblk -dnro TYPE "$path" | tr -d '[:space:]')" = disk ] || fail "not a whole disk: $path"
     real=$(readlink -f "$path"); serial=$(gentoo_disk_serial "$real"); bytes=$(lsblk -bndro SIZE "$real" | tr -d '[:space:]')
     [ "$serial" = "$expected" ] && [ "$bytes" -ge "$minimum" ] && [ "$bytes" -le "$maximum" ] || fail "serial/capacity mismatch: $path"
-    if [ -n "$expected_wwn" ]; then value=$(lsblk -dnro WWN "$real" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//'); [ "$value" = "$(printf '%s' "$expected_wwn" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')" ] || fail 'disk WWN mismatch.'; fi
-    if [ -n "$expected_model" ]; then value=$(lsblk -dnro MODEL "$real" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ "$value" = "$expected_model" ] || fail 'disk model mismatch.'; fi
+    if [ -n "$expected_wwn" ]; then value=$(gentoo_disk_attribute WWN "$real" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//'); [ "$value" = "$(printf '%s' "$expected_wwn" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')" ] || fail 'disk WWN mismatch.'; fi
+    if [ -n "$expected_model" ]; then value=$(gentoo_disk_attribute MODEL "$real" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ "$value" = "$expected_model" ] || fail 'disk model mismatch.'; fi
     printf '%s\n' "$real"
 }
 resolve_disks() {
@@ -92,12 +103,17 @@ resolve_disks() {
         BOOT_MIN=$GENTOO_HARDWARE_DISKS_BOOT_MIN_BYTES; BOOT_MAX=$GENTOO_HARDWARE_DISKS_BOOT_MAX_BYTES
         EXTRA_MIN=$GENTOO_HARDWARE_DISKS_EXTRA_MIN_BYTES; EXTRA_MAX=$GENTOO_HARDWARE_DISKS_EXTRA_MAX_BYTES
     fi
+    if [ "$GENTOO_MODE" = hardware ]; then
+        ROOT_DISK=$(gentoo_resolve_hardware_disk "$ROOT_DISK" "$ROOT_SERIAL" "$ROOT_MIN" "$ROOT_MAX" "$GENTOO_HARDWARE_DISKS_ROOT_WWN" "$GENTOO_HARDWARE_DISKS_ROOT_MODEL")
+        BOOT_DISK=$(gentoo_resolve_hardware_disk "$BOOT_DISK" "$BOOT_SERIAL" "$BOOT_MIN" "$BOOT_MAX" "" "")
+        EXTRA_DISK=$(gentoo_resolve_hardware_disk "$EXTRA_DISK" "$EXTRA_SERIAL" "$EXTRA_MIN" "$EXTRA_MAX" "$GENTOO_HARDWARE_DISKS_EXTRA_WWN" "$GENTOO_HARDWARE_DISKS_EXTRA_MODEL")
+    fi
     ROOT_REAL=$(check_disk "$ROOT_DISK" "$ROOT_SERIAL" "$ROOT_MIN" "$ROOT_MAX" "$GENTOO_HARDWARE_DISKS_ROOT_WWN" "$GENTOO_HARDWARE_DISKS_ROOT_MODEL")
     BOOT_REAL=$(check_disk "$BOOT_DISK" "$BOOT_SERIAL" "$BOOT_MIN" "$BOOT_MAX" "" "")
     EXTRA_REAL=$(check_disk "$EXTRA_DISK" "$EXTRA_SERIAL" "$EXTRA_MIN" "$EXTRA_MAX" "$GENTOO_HARDWARE_DISKS_EXTRA_WWN" "$GENTOO_HARDWARE_DISKS_EXTRA_MODEL")
     EXTRA_BYTES=$(lsblk -bndro SIZE "$EXTRA_REAL" | tr -d '[:space:]')
-    EXTRA_WWN_OBSERVED=$(lsblk -dnro WWN "$EXTRA_REAL" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
-    EXTRA_MODEL_OBSERVED=$(lsblk -dnro MODEL "$EXTRA_REAL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    EXTRA_WWN_OBSERVED=$(installer_disk_attribute WWN "$EXTRA_REAL" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
+    EXTRA_MODEL_OBSERVED=$(installer_disk_attribute MODEL "$EXTRA_REAL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     if [ "$GENTOO_MODE" = hardware ]; then EXTRA_BY_ID=$GENTOO_HARDWARE_DISKS_EXTRA_BY_ID; else EXTRA_BY_ID=; fi
     if [ "$GENTOO_MODE" = hardware ]; then ROOT_BY_ID=$GENTOO_HARDWARE_DISKS_ROOT_BY_ID; else ROOT_BY_ID=; fi
     [ "$ROOT_REAL" != "$BOOT_REAL" ] && [ "$ROOT_REAL" != "$EXTRA_REAL" ] && [ "$BOOT_REAL" != "$EXTRA_REAL" ] || fail 'root, boot and extra disks must differ.'
@@ -106,8 +122,8 @@ resolve_disks() {
     ROOT_PART=$(gentoo_partition_path "$ROOT_REAL" 1); ROOT_BYTES=$(lsblk -bndro SIZE "$ROOT_REAL" | tr -d '[:space:]')
     ROOT_MAJMIN=$(lsblk -dnro MAJ:MIN "$ROOT_REAL" | tr -d '[:space:]')
     [ "$ROOT_BYTES" -ge "$(((ROOT_GIB + SWAP_GIB + RESERVE_GIB + HOME_MIN_GIB + 2) * 1073741824))" ] || fail 'root disk too small for layout.'
-    ROOT_WWN_OBSERVED=$(lsblk -dnro WWN "$ROOT_REAL" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
-    ROOT_MODEL_OBSERVED=$(lsblk -dnro MODEL "$ROOT_REAL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    ROOT_WWN_OBSERVED=$(installer_disk_attribute WWN "$ROOT_REAL" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
+    ROOT_MODEL_OBSERVED=$(installer_disk_attribute MODEL "$ROOT_REAL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     while IFS= read -r child; do [ -z "$child" ] || [ -z "$(findmnt -rn -S "$child" -o TARGET 2>/dev/null || true)" ] || fail "target is mounted: $child"; done < <(lsblk -nrpo NAME "$ROOT_REAL")
 }
 native_run() { chroot "$NATIVE_ROOT" /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C "$@"; }
@@ -301,7 +317,8 @@ copy_continuation_bundle() {
     install -m 0644 "$SCRIPT_DIR/setup-extra.sh" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh "$TARGET_ROOT/usr/local/sbin/ms1504-extra"
-    for name in complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
+    mkdir -p "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/lib" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/sources"
+    for name in source-only-emerge.py cpu-policy.py lib/repository-policy.sh lib/devices.sh lib/hardware-discovery.sh sources/gentoo-repository.lock complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
         install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
     done
     for name in "${GENTOO_PACKAGES_DESKTOP:-}" "${GENTOO_PACKAGES_DESKTOP_USE:-}" \
@@ -395,7 +412,7 @@ install_root() {
     chmod 0644 "$TARGET_ROOT/etc/ms1504-extra-identity"
     printf '%s\n' "$BASE_GENERATION" > "$TARGET_ROOT/etc/ms1504-generation"
     chmod 0644 "$TARGET_ROOT/etc/ms1504-generation"
-    repo_commit=5548522e2c2fa10a4c009348e9ba84c44783f47d
+    repo_commit=$(gentoo_repository_commit "$SCRIPT_DIR/sources/gentoo-repository.lock") || fail 'invalid repository lock'
     [ -d "$TARGET_ROOT/usr/portage/profiles" ] || fail 'pinned Gentoo repository is missing from the installation root.'
     install -d -m 0755 "$TARGET_ROOT/usr/share/gentoo-continuation"
     printf 'repository commit=%s\nrepository tree sha256=%s\n' "$repo_commit" "$(tree_sha256 "$TARGET_ROOT/usr/portage")" \

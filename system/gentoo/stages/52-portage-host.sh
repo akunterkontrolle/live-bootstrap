@@ -33,7 +33,7 @@ portage_host_verify() {
     grep -Fxq "MAKEOPTS=\"-j$GENTOO_PORTAGE_MAKE_JOBS\"" \
         "$PORTAGE_CONFIG/etc/portage/make.conf" || return 1
     [ "$(readlink "$PORTAGE_CONFIG/etc/portage/make.profile")" = \
-        "$GENTOO_REPO_TREE/profiles/default/linux/amd64/23.0/desktop" ] || return 1
+        "$GENTOO_REPO_TREE/profiles/$GENTOO_BASE_PROFILE" ] || return 1
     gentoo_prepare_source sources/gentoo-repository.lock || return 1
     gentoo_prepare_source sources/portage.lock || return 1
     portage_verify_guest_account || return 1
@@ -58,7 +58,7 @@ portage_host_verify() {
 # Portage settings affect runtime commands but do not fingerprint built sources.
 portage_render_config
 fingerprint=$(gentoo_fingerprint stages/52-portage-host.sh lib/portage-host.sh lib/manifests.sh lib/sources.sh \
-    probes/portage-integrity.py probes/portage-version.py sources/portage.lock \
+    probes/portage-integrity.py probes/portage-version.py source-only-emerge.py lib/repository-policy.sh sources/portage.lock \
     "$WORK_ROOT/state/50-gentoo-sources.done" "$WORK_ROOT/state/51-host-python.done")
 gentoo_run_stage 52-portage-host "$fingerprint" portage_host_action portage_host_verify
 printf 'Source-built Python and pinned source-only Portage host are ready.\n'

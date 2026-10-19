@@ -1,0 +1,3 @@
+# Upstream v18 (commit f9c920807cdfb6eeea6b22a88f20b1907d88a8eb).
+# HTTPS archive checksum pins content; no upstream signature verification claim.
+cpuid2cpuflags-18.tar.gz|https://github.com/gentoo/cpuid2cpuflags/archive/refs/tags/v18.tar.gz|sha512=1dee771c9ecc542b1fcdc9bf8f5eb2be347d22e14cd92c5c1f69d0aa3205af8b19ebd35af9e7da776dbcc4605feb29fd3b936225216725cbdc3470f6e9da844b

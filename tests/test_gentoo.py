@@ -71,7 +71,10 @@ class GentooTests(unittest.TestCase):
         text = '[hardware_disks]\n' + '\n'.join(
             f'{role}_by_id="/dev/disk/by-id/ata-{role}"\n{role}_serial="{role}"'
             for role in ('root', 'boot', 'extra'))
+        text += '\nroot_model="Root SSD"\nroot_wwn="0x5000000000000001"\nextra_model="Extra SSD"\nextra_wwn="0x5000000000000002"\n'
         self.load(text, 'hardware')
+        with self.assertRaises(ValueError):
+            self.load(text.replace('root_model="Root SSD"', 'root_model=""'), 'hardware')
         with self.assertRaises(ValueError):
             self.load(text.replace('extra_serial="extra"', 'extra_serial="root"'), 'hardware')
 

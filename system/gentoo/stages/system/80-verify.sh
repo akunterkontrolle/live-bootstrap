@@ -2,32 +2,15 @@
 # Sourced by stages/80-native-gentoo-system.sh; shares its checked state.
 # The fresh source-built continuation root and Gentoo profile are already
 # multilib. Keep the selected profile stable across the first @system pass.
-if [ ! -s "$multilib_profile_marker" ]; then
-    expected_seed_profile=/usr/portage/profiles/default/linux/amd64/23.0/split-usr/no-multilib
-    [ "$(readlink "$NATIVE_ROOT/etc/portage/make.profile")" = "$expected_seed_profile" ] || {
-        echo 'Refusing to change an unexpected Gentoo seed profile to multilib.' >&2; exit 1;
-    }
-    gentoo_profile_path=/usr/portage/profiles/default/linux/amd64/23.0/split-usr
-    ln -sfn "$gentoo_profile_path" "$NATIVE_ROOT/etc/portage/make.profile"
-    [ "$(readlink "$NATIVE_ROOT/etc/portage/make.profile")" = "$gentoo_profile_path" ] || {
-        echo 'Could not activate the pinned amd64 multilib Gentoo profile.' >&2; exit 1;
-    }
-    printf 'complete %s\nGentoo repository commit=%s\nprevious profile=%s\nactive profile=%s\ndriver sha256=%s\n' \
-        "$(date -u +%FT%TZ)" "$REPO_COMMIT" "$expected_seed_profile" \
-        "$gentoo_profile_path" "$driver_hash" > "$multilib_profile_marker.tmp"
-    sync "$multilib_profile_marker.tmp"
-    mv "$multilib_profile_marker.tmp" "$multilib_profile_marker"
-    sync "$STATE"
-else
-    grep -Fxq "Gentoo repository commit=$REPO_COMMIT" "$multilib_profile_marker" &&
-        grep -Fxq 'active profile=/usr/portage/profiles/default/linux/amd64/23.0/split-usr' \
-            "$multilib_profile_marker" &&
-        marker_driver_recorded "$multilib_profile_marker" &&
-        [ "$(readlink "$NATIVE_ROOT/etc/portage/make.profile")" = \
-            /usr/portage/profiles/default/linux/amd64/23.0/split-usr ] || {
-        echo 'Gentoo multilib profile marker and active profile do not match.' >&2; exit 1;
-    }
-fi
+[ -s "$multilib_profile_marker" ] || { echo 'Early multilib profile receipt is missing.' >&2; exit 1; }
+grep -Fxq "Gentoo repository commit=$REPO_COMMIT" "$multilib_profile_marker" &&
+    grep -Fxq 'active profile=/usr/portage/profiles/default/linux/amd64/23.0/split-usr' \
+        "$multilib_profile_marker" &&
+    marker_driver_recorded "$multilib_profile_marker" &&
+    [ "$(readlink "$NATIVE_ROOT/etc/portage/make.profile")" = \
+        /usr/portage/profiles/default/linux/amd64/23.0/split-usr ] || {
+    echo 'Gentoo multilib profile marker and active profile do not match.' >&2; exit 1;
+}
 if grep -Fxq 'ABI_X86="64"' "$NATIVE_ROOT/etc/portage/make.conf"; then
     sed -i 's/^ABI_X86="64"$/ABI_X86="64 32"/' "$NATIVE_ROOT/etc/portage/make.conf"
 fi
@@ -164,6 +147,20 @@ case "$installed_gentoo_perl" in dev-lang/perl-*) ;; *)
     echo "Gentoo's own Perl ebuild is not installed after @system: $installed_gentoo_perl" >&2; exit 1 ;;
 esac
 printf 'Gentoo Perl runtime=%s\n' "$installed_gentoo_perl"
+
+# Replace the pre-ebuild detector with its pinned Gentoo source package in
+# the installed runtime. The workspace retains its static resume prerequisite.
+run_emerge --oneshot --noreplace =app-portage/cpuid2cpuflags-18
+chroot_env /usr/bin/cpuid2cpuflags > "$STATE/gentoo-cpu-flags.observed"
+python3 - "$STATE/native-cpu-policy.json" "$STATE/gentoo-cpu-flags.observed" <<'CPU_FLAGS'
+import json, sys
+record = json.load(open(sys.argv[1]))
+flags = open(sys.argv[2]).read().strip()
+assert flags.startswith('*/* CPU_FLAGS_X86: '), flags
+assert set(record['cpu_flags_x86']) == set(flags.split(':', 1)[1].split()), flags
+CPU_FLAGS
+chroot_env /usr/bin/python3.12 /usr/local/libexec/gentoo-continuation/cpu-policy.py \
+    --receipt /etc/portage/native-cpu-policy.json --detector /usr/bin/cpuid2cpuflags --compiler /usr/bin/gcc
 
 PHASE=verify-source-built-wget-tls
 wget_marker="$STATE/native-wget-1.25.0.done"

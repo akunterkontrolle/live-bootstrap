@@ -39,6 +39,8 @@ mkdir -p "$WORK_ROOT"
 gentoo_lock
 [ ! -d /run/gentoo-shutdown-in-progress ] || gentoo_die 'shutdown is in progress'
 mkdir -p "$WORK_ROOT/logs" "$WORK_ROOT/state"
+. "$SCRIPT_DIR/lib/cpu-policy.sh"
+gentoo_verify_recorded_cpu
 if [ "$command" = status ]; then
     find "$WORK_ROOT/state" -maxdepth 1 -name '*.done' -print | LC_ALL=C sort
     exit 0
@@ -138,6 +140,7 @@ if [ "$GENTOO_MODERN_KERNEL_READY" = 1 ]; then
         . "$SCRIPT_DIR/stages/70-native-runtimes.sh"
         . "$SCRIPT_DIR/stages/71-native-portage.sh"
     fi
+    . "$SCRIPT_DIR/stages/72-native-cpu-policy.sh"
     # This account directory stays private despite the public build umask.
     chmod 0700 "$NATIVE_ROOT/root"
     python3 "$SCRIPT_DIR/probes/native-permissions.py" --root "$NATIVE_ROOT"

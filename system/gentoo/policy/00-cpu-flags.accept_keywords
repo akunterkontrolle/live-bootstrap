@@ -1,0 +1,2 @@
+# The reviewed detector matches the checksum-pinned pre-ebuild prerequisite.
+=app-portage/cpuid2cpuflags-18 ~amd64

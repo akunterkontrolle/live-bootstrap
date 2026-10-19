@@ -39,6 +39,10 @@ root_gib = 500
 extra_gib = 128
 
 # Required only in hardware mode. Observe these IDs on the actual machine.
+# Root and extra require serial, model, WWN and capacity bounds.
+# Model is the canonical sysfs device/model value; it may be shorter than
+# udev's marketing name and must be observed on the target.
+# The protected USB boot medium requires its serial and capacity bounds.
 # boot is the original bootstrap medium; extra initially holds the workspace.
 [hardware_disks]
 root_by_id = ""

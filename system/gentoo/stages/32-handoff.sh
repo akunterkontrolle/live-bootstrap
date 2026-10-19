@@ -1,5 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
+. "$SCRIPT_DIR/lib/handoff.sh"
 input_digest=$(basename "$SCRIPT_DIR")
 [[ "$input_digest" =~ ^[0-9a-f]{64}$ ]] || gentoo_die 'handoff must use a content-addressed input snapshot'
 handoff="$WORK_ROOT/handoff/$input_digest"
@@ -53,6 +54,8 @@ handoff_verify() {
 fingerprint=$(gentoo_fingerprint stages/32-handoff.sh post-reboot.sh shutdown.sh SHA256SUMS \
     "$KERNEL_ARTIFACTS/SHA256SUMS" "$WORK_ROOT/state/30-kernel.done" "$WORK_ROOT/state/31-kernel-modules.done")
 gentoo_run_stage "32-handoff-$input_digest" "$fingerprint" handoff_action handoff_verify
+# This command remains available while /build is unmounted after cold boot.
+gentoo_publish_bootstrap_resume "${GENTOO_BOOTSTRAP_ROOT:-/}"
 # The host reads this only after the workspace is cleanly unmounted.
 temporary=$(mktemp "$WORK_ROOT/.handoff-current.XXXXXX")
 printf '%s\n' "$input_digest" > "$temporary"
@@ -70,5 +73,6 @@ else
     printf '\nSHUTDOWN MILESTONE: kernel, modules and all continuation inputs are durable.\n'
     printf 'From the guest console: cd /; bash %s/shutdown.sh\n' "$handoff"
     printf 'VM host: python3 system/gentoo/vm.py continue --run-dir RUN_DIRECTORY --apply\n'
+    printf 'After cold boot, guest root: /usr/local/sbin/gentoo-resume\n'
     printf 'T440p: boot the saved kernel with the existing bootstrap root; see README.\n'
 fi

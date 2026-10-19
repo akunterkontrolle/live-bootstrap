@@ -1,11 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
+. "$SCRIPT_DIR/lib/repository-policy.sh"
 GENTOO_REPO_LOCK=sources/gentoo-repository.lock
 GENTOO_REPO_RECORD=$(gentoo_source_record "$GENTOO_REPO_LOCK") || gentoo_die 'invalid Gentoo repository lock'
 GENTOO_REPO_ARCHIVE=${GENTOO_REPO_RECORD%%|*}
-GENTOO_REPO_COMMIT=${GENTOO_REPO_ARCHIVE#gentoo-}
-GENTOO_REPO_COMMIT=${GENTOO_REPO_COMMIT%.tar.gz}
-[[ "$GENTOO_REPO_COMMIT" =~ ^[0-9a-f]{40}$ ]] || gentoo_die 'invalid pinned Gentoo commit'
+GENTOO_REPO_COMMIT=$(gentoo_repository_commit "$GENTOO_REPO_LOCK") || gentoo_die 'invalid pinned Gentoo commit'
 GENTOO_REPO_TREE="$SOURCES/gentoo-$GENTOO_REPO_COMMIT"
 GENTOO_MANIFEST_RECEIPT="$WORK_ROOT/state/gentoo-manifests-$GENTOO_REPO_COMMIT.sha256"
 GENTOO_REPOSITORY_RECEIPT="$WORK_ROOT/state/gentoo-tree-$GENTOO_REPO_COMMIT.sha256"

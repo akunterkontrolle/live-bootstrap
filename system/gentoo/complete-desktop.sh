@@ -10,13 +10,14 @@ umask 077
 SCRIPT_PATH=$(readlink -f -- "$0")
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
 . "$SCRIPT_DIR/config.sh"
+. "$SCRIPT_DIR/lib/repository-policy.sh"
 STATE_DIR=/var/lib/ms1504-gentoo
 STATE="$STATE_DIR/desktop"
 LOCK=/run/lock/ms1504-complete-desktop.lock
 REPO=/usr/portage
 PROFILE=/etc/portage/make.profile
-PINNED_PROFILE=/usr/portage/profiles/default/linux/amd64/23.0/split-usr
-DESKTOP_PROFILE=/usr/portage/profiles/default/linux/amd64/23.0/split-usr/desktop
+PINNED_PROFILE=/usr/portage/profiles/$GENTOO_BASE_PROFILE
+DESKTOP_PROFILE=/usr/portage/profiles/$GENTOO_DESKTOP_PROFILE
 SOURCE_RECEIPT=/usr/share/gentoo-continuation/gentoo-source-receipt
 LOG_DIR=/extra/portage/logs
 DISTDIR=/extra/portage/distfiles
@@ -39,10 +40,12 @@ tree_hash() {
 
 [ "$(id -u)" -eq 0 ] || die 'run as root (use sudo).'
 for command in awk bash chmod cryptsetup date emerge find findmnt flock install lvs mountpoint portageq python3 readlink rc-update sed sha256sum sleep sort sync tee xargs; do need "$command"; done
+python3 "$SCRIPT_DIR/cpu-policy.py" --receipt /etc/portage/native-cpu-policy.json \
+    --detector /usr/bin/cpuid2cpuflags --compiler /usr/bin/gcc
 [ -x /usr/bin/gcc ] && [ -x /usr/bin/g++ ] || die 'source-built multilib GCC is missing.'
 [ -x /usr/bin/emerge ] && [ -d "$REPO/profiles" ] || die 'installed pinned Gentoo tree or Portage is missing.'
 [ -s "$SOURCE_RECEIPT" ] || die "pinned Gentoo source receipt is missing: $SOURCE_RECEIPT."
- pinned_commit=5548522e2c2fa10a4c009348e9ba84c44783f47d
+pinned_commit=$(gentoo_repository_commit "$SCRIPT_DIR/sources/gentoo-repository.lock") || die 'invalid repository lock'
 grep -Fxq "repository commit=$pinned_commit" "$SOURCE_RECEIPT" || die 'source receipt has the wrong Gentoo commit.'
 grep -Fxq 'repository tree sha256='"$(tree_hash "$REPO")" "$SOURCE_RECEIPT" ||
     die 'installed Gentoo tree identity differs from its source receipt.'
@@ -156,6 +159,9 @@ export MAKEOPTS="-j$DESKTOP_MAKE_JOBS"
 export EMERGE_DEFAULT_OPTS="--jobs=$DESKTOP_PACKAGE_JOBS --load-average=$DESKTOP_LOAD_AVERAGE --usepkg=n --getbinpkg=n --buildpkg=n"
 printf 'Desktop build parallelism: make jobs=%s; package jobs=%s; load average=%s\n' \
     "$DESKTOP_MAKE_JOBS" "$DESKTOP_PACKAGE_JOBS" "$DESKTOP_LOAD_AVERAGE"
+
+# Use the same effective configuration and option checks as host/chroot builds.
+emerge() { python3 "$SCRIPT_DIR/source-only-emerge.py" /usr/bin/emerge "$@"; }
 
 # Retire the old selected server without removing any installed package here.
 emerge --deselect media-sound/pulseaudio-daemon

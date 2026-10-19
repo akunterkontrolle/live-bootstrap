@@ -43,6 +43,7 @@ gentoo_persist_bundle() { :; }
 ''')
         (bundle / 'lib/devices.sh').write_text('gentoo_mount_workspace() { :; }\n')
         (bundle / 'lib/mounts.sh').write_text('gentoo_prepare_virtual_filesystems() { :; }\n')
+        (bundle / 'lib/cpu-policy.sh').write_text('gentoo_verify_recorded_cpu() { :; }\n')
         for name in ('state', 'sources', 'toolchain'):
             (bundle / 'lib' / (name + '.sh')).write_text('')
         for line in driver.splitlines():

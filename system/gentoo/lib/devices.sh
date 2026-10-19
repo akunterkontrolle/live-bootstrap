@@ -1,15 +1,23 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Device helpers inspect/mount existing filesystems only. No format operations.
+. "$(dirname -- "${BASH_SOURCE[0]}")/hardware-discovery.sh"
 gentoo_disk_serial() {
-    local disk=$1 path serial tool
+    local disk=$1 path sysnode serial tool
     serial=$(lsblk -dnro SERIAL "$disk" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') || serial=
     if [ -n "$serial" ]; then printf '%s\n' "$serial"; return; fi
-    path=$(readlink -f "/sys/class/block/${disk##*/}/device")
+    sysnode=$(readlink -f "/sys/class/block/${disk##*/}/device")
+    path=$sysnode
     while [[ "$path" == /sys/* ]]; do
-        if [ -s "$path/serial" ]; then cat "$path/serial"; return; fi
+        if [ -r "$path/serial" ]; then
+            serial=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$path/serial") || serial=
+            if [ -n "$serial" ]; then printf '%s\n' "$serial"; return; fi
+        fi
         path=${path%/*}
     done
+    if serial=$(gentoo_sysfs_vpd_serial "$sysnode/vpd_pg80"); then
+        printf '%s\n' "$serial"; return
+    fi
     # Post-Gentoo installation runs from the musl host without a udev DB.
     # The native helper can read an IDE disk's ATA identity directly.
     if declare -F gentoo_native_ata_serial >/dev/null &&
@@ -26,25 +34,25 @@ gentoo_disk_serial() {
 
 gentoo_disk_attribute() {
     local field=$1 disk=$2 sysnode value
-    if command -v lsblk >/dev/null 2>&1; then
-        lsblk -dnro "$field" "$disk" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
-        return
-    fi
-    # The pinned live-bootstrap util-linux omits lsblk. The first hardware
-    # workspace check only needs these two identity fields, which sysfs exports.
+    # Prefer the kernel's canonical model/WWN representation so discovery is
+    # stable before and after udev starts (its model strings can be longer).
     sysnode="/sys/class/block/${disk##*/}"
     case "$field" in
-        MODEL) value=$(cat "$sysnode/device/model" 2>/dev/null) || return 1 ;;
+        MODEL) value=$(cat "$sysnode/device/model" 2>/dev/null) || value= ;;
         WWN)
             value=$(cat "$sysnode/wwid" 2>/dev/null) ||
-                value=$(cat "$sysnode/device/wwid" 2>/dev/null) || return 1
-            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[Nn][Aa][Aa]\.//')
+                value=$(cat "$sysnode/device/wwid" 2>/dev/null) || value=
+            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^[Nn][Aa][Aa]\.//;s/^[Ee][Uu][Ii]\.//')
             case "$value" in 0x*|0X*) value=${value:2} ;; esac
-            value="0x$value"
+            [ -z "$value" ] || value="0x$value"
             ;;
         *) return 1 ;;
     esac
-    printf '%s\n' "$value"
+    if [ -z "$value" ] && command -v lsblk >/dev/null 2>&1; then
+        value=$(lsblk -dnro "$field" "$disk" 2>/dev/null) || return 1
+    fi
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
 gentoo_check_hardware_workspace() {
@@ -52,7 +60,10 @@ gentoo_check_hardware_workspace() {
     parent=$(readlink -f "/sys/class/block/${device##*/}")
     [ ! -f "$parent/partition" ] || parent=${parent%/*}
     disk="/dev/${parent##*/}"
-    expected=$(readlink -f "$GENTOO_HARDWARE_DISKS_EXTRA_BY_ID")
+    expected=$(gentoo_resolve_hardware_disk "$GENTOO_HARDWARE_DISKS_EXTRA_BY_ID" \
+        "$GENTOO_HARDWARE_DISKS_EXTRA_SERIAL" "$GENTOO_HARDWARE_DISKS_EXTRA_MIN_BYTES" \
+        "$GENTOO_HARDWARE_DISKS_EXTRA_MAX_BYTES" "$GENTOO_HARDWARE_DISKS_EXTRA_WWN" \
+        "$GENTOO_HARDWARE_DISKS_EXTRA_MODEL")
     [ -b "$expected" ] && [ "$disk" = "$expected" ] || gentoo_die 'workspace is not on the configured extra disk'
     [ "$(gentoo_disk_serial "$disk")" = "$GENTOO_HARDWARE_DISKS_EXTRA_SERIAL" ] || gentoo_die 'workspace disk serial mismatch'
     size=$(blockdev --getsize64 "$disk")
