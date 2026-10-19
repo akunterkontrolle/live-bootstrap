@@ -5,6 +5,8 @@ import importlib.util
 import io
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -155,3 +157,45 @@ class PinnedPortagePolicyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 guard.run('/fixture/emerge', ['--pretend', '@system'])
             merge.assert_not_called()
+
+    def test_generated_perl_environment_and_base_atoms_use_pinned_portage_syntax(self):
+        from portage.dep import Atom
+        from portage.exception import InvalidAtom
+        from portage.util import getconfig
+        native = self.root / 'native'
+        helper = GENTOO / 'lib/perl-locale.sh'
+        script = ('set -Eeuo pipefail\nNATIVE_ROOT=' + shlex.quote(str(native)) +
+                  '\n. ' + shlex.quote(str(helper)) + '\n'
+                  'chroot_env() { :; }\n'
+                  'gentoo_die() { echo "$*" >&2; exit 1; }\n'
+                  'perl_locale_install_policy\n')
+        subprocess.run(['bash', '-c', script], check=True, capture_output=True, timeout=5)
+        values = getconfig(str(native / 'etc/portage/env/90-gentoo-perl-locale.conf'),
+                           tolerant=False, expand={'EXTRA_ECONF': '-Dprevious=define'})
+        self.assertEqual(values['EXTRA_ECONF'].split(), [
+            '-Dprevious=define', '-Dd_perl_lc_all_uses_name_value_pairs=define',
+            '-Ud_perl_lc_all_separator', '-Ud_perl_lc_all_category_positions_init'])
+        with self.assertRaises(InvalidAtom):
+            Atom('sys-kernel/linux-firmware-20260916')
+        for line in (GENTOO / 'policy/defaults/base-packages.list').read_text().splitlines():
+            if line.strip() and not line.lstrip().startswith('#'):
+                Atom(line.strip())
+
+
+@unittest.skipUnless(os.environ.get('GENTOO_TEST_REPOSITORY'),
+                     'set GENTOO_TEST_REPOSITORY to the extracted pinned repository')
+class PinnedRepositoryAtomsTests(unittest.TestCase):
+    def test_default_base_atoms_have_ebuilds_in_the_supplied_locked_repository(self):
+        root = Path(os.environ['GENTOO_TEST_REPOSITORY'])
+        lock = (GENTOO / 'sources/gentoo-repository.lock').read_text()
+        self.assertIn(root.name + '.tar.gz|', lock)
+        for line in (GENTOO / 'policy/defaults/base-packages.list').read_text().splitlines():
+            atom = line.strip()
+            if not atom or atom.startswith('#'):
+                continue
+            plain = atom.lstrip('=').split('[')[0]
+            package = re.sub(r'-[0-9].*$', '', plain)
+            candidates = list((root / package).glob('*.ebuild'))
+            if atom.startswith('='):
+                candidates = [p for p in candidates if p.stem == plain.split('/')[1]]
+            self.assertTrue(candidates, atom)

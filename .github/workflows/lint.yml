@@ -42,3 +42,16 @@ jobs:
         run: sudo pip3 install reuse
       - name: reuse
         run: reuse lint
+
+  gentoo:
+    name: Gentoo continuation checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Install disposable VM and filesystem test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils e2fsprogs util-linux psmisc gcc g++ curl
+      - name: Check syntax and maintained Gentoo behavior
+        run: python3 tests/run_gentoo_checks.py --fetch-portage

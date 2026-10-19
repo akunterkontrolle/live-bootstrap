@@ -1,1095 +1,380 @@
-# Gentoo continuation — integrated batches 1–14
+# Source-built Gentoo base
 
-## Prerequisites and ownership
+This continuation takes live-bootstrap to a multilib Gentoo base with encrypted
+root, home and swap, a login account, sudo, locale and wired networking.
+**The repaired VM has booted successfully; the consolidated procedure still
+requires a fresh VM replay. Destructive T440p installation is not yet cleared.**
+The base boot and clean reboot are the checkpoint. Signing, recovery generations,
+firmware changes, workspace migration, encrypted `/extra` and desktop completion
+have separate review and acceptance gates. The first T440p boot may use its
+existing unsigned firmware boot route.
 
-Host commands run from the repository root with Python 3.11+. VM operations
-need QEMU (`qemu-system-x86_64`, `qemu-img`), util-linux (`blkid`, `losetup`,
-`mount`, `umount`), e2fsprogs (`mkfs.ext4`, `dumpe2fs`), psmisc `fuser`, xz and
-GnuPG `gpgv`. Use root for lifecycle operations so open-image checks can inspect
-other users' processes and continuation can mount the workspace read-only.
-`socat` is useful for the serial console. The original command selects KVM or
-TCG and any CPU model, display and networking options; the helper records them.
-Sparse images need real host free space as their contents grow.
+## Before starting
 
-Guest commands run as root in the completed live-bootstrap Linux environment.
-They need Bash, GNU coreutils/findutils, awk, sed, Perl and the pinned util-linux
-`blkid` and `mount`. That util-linux is 2.19.1 and intentionally omits `flock`
-and `lsblk`; continuation locking therefore uses Perl's kernel `flock(2)` with
-a pipe-held process lifetime, and early mount checks read `/proc/mounts`.
-The post-reboot handoff loads this mount-check fallback before probing `/proc`
-and `/sys`. It then starts the original source-built `dhcpcd`, waits up to 60
-seconds for an IPv4 lease, and runs the continuation after DHCP succeeds.
-The bootstrap root already includes dhcpcd and its resolver hooks; the cold
-boot with `init=/bin/bash` needs to start it again. Use a DHCP-enabled wired
-connection for bootstrap networking on the T440p.
-Hardware workspace identity checks use sysfs because `lsblk` is absent there;
-the later installed-system storage commands run with Gentoo's own util-linux.
-Hardware identification also needs `blockdev`, `/sys` and persistent
-`/dev/disk/by-id` links. Source builds
-use the original source-built GCC/G++, GMP/MPFR/MPC/zlib static libraries,
-OpenSSL and zlib development headers/libraries for Python's `ssl` and `zlib`
-modules, make, tar/decompressors, curl, Bison, Flex, Perl, Python and
-autotools. No guest TOML parser is used. The preflight compiles and runs host
-prerequisite probes and binds the host compiler, component, header and archive
-checksums to this run.
+Run host commands from the repository root. Use Python 3.11+, Bash, QEMU
+(`qemu-system-x86_64`, `qemu-img`), util-linux (`blkid`, `losetup`, `mount`,
+`umount`), e2fsprogs, psmisc `fuser`, xz and GnuPG `gpgv`. Install `socat` for
+the printed serial-console command. VM lifecycle operations use sudo so they
+can inspect open images and mount the stopped workspace read-only. Build
+prerequisites inside the bootstrap environment are checked by the driver.
 
-The host owns TOML parsing, execution-mode selection, input copying, VM resources
-and image paths. The guest owns source builds, receipts and the durable handoff.
-`--mode vm|hardware` remains explicit in `prepare.py` until batch 14 derives it
-from `rootfs.py --qemu|--bare-metal`. Existing `--cores`, `--qemu-ram` and
-`--target-size` continue to select VM resources and original-bootstrap capacity.
-TOML supplies independent source/Portage concurrency, account, locale, layout
-and package choices. It cannot override those original-bootstrap switches.
+Copy `config.example.toml` to a local operator file and edit it before building.
+`--cores`, `--qemu-ram` and `--target-size` select original-bootstrap resources;
+TOML independently controls later source/Portage concurrency, account, locale,
+layout and package policy. Passwords, passphrases and private keys never belong
+in TOML. Package-policy paths resolve relative to the TOML and are copied into
+the immutable bundle. Keep the selected TOML with the run record.
 
-`vm.py prepare --apply` creates ONLY four regular image files owned by the run:
-128 GiB workspace, 128 GiB scratch, 500 GiB installation root and 128 GiB extra
-by default. Root capacity grows to fit the configured layout when creating a
-new image. The workspace and scratch get ext4 filesystems; root and extra are
-empty qcow2 containers awaiting explicit storage initialization in batch 10.
-There is no separate synthetic boot disk: the recorded original bootstrap disk
-is the boot medium. Existing images are validated and reused without resizing,
-truncating or reformatting. No host physical disk is accepted.
+The VM defaults to 128 GiB workspace, 128 GiB scratch, 500 GiB root and 128 GiB
+extra images, in addition to the original bootstrap disk. Root capacity grows
+to fit the configured layout when first created. Workspace/scratch are ext4;
+root/extra begin as empty containers. Images are sparse, but require actual
+host free space as builds grow. Before Gentoo system builds, checks require
+50 GiB free inside the workspace and 24 GiB inside scratch, plus recorded host
+headroom of 8 GiB for workspace and 70 GiB for scratch. Budget more for retained
+sources, backup copies and later builds. The example below allocates 48 GiB RAM
+and 18 cores; reduce concurrency and resource arguments to suit the host.
+Hardware uses the existing workspace for scratch and requires at least 70 GiB
+free there. A full source build takes substantial time; retain logs and caches.
 
-Builds write under `/build/gentoo-bootstrap` only after proving the workspace
-mount. Hardware begins with an existing writable ext4 workspace on the
-configured extra disk; the build never creates that filesystem. Batch 12 adds
-a separate installed-system procedure to copy the workspace into encrypted
-`/home`, verify it, then initialize encrypted `/extra`. Original-bootstrap
-integration and firmware writes remain separate.
-Passwords, passphrases, private keys and tokens do not belong in TOML/policies.
+## Preserve the working fallback
 
-The opt-in original-bootstrap integration is enabled by `--extra-builds
-gentoo`. It host-validates and bundles all continuation inputs, adds one
-numbered `/steps/after` hook, and leaves invocations without Gentoo selected on
-the existing path. VM disk creation and launch use the recorded `vm.py`
-lifecycle; `--cores`, `--qemu-ram`, and `--target-size` keep their existing
-ownership and meanings.
+Before validation, shut the successful VM down completely. Save an independent
+copy **outside Git** of every image and its complete backing chain, the original
+bootstrap media, TOML, launcher JSON records, immutable inputs, receipts, and
+kernel/initramfs artifacts. Inspect each qcow2 image with
+`qemu-img info --backing-chain IMAGE`. Copy every dependency or create standalone
+copies with `qemu-img convert` while powered off. A linked snapshot alone is not
+an independent backup. Record checksums and original paths.
 
-## Integrated first-run command guide
+Boot-test an isolated working copy of that backup, with launcher paths adjusted
+to its copied images; ensure no disk path still points to the original. Keep
+the saved backup unchanged after the test. The launcher records absolute paths,
+so moving a directory alone does not relocate a runnable installation. Inspect
+the saved record and full QEMU command before starting the copy. Retain the
+previous working launcher and CPU model for this test; consolidated CPU checks
+cannot certify an older base that predates CPU receipts.
 
-1. **VM host:** create a VM-mode TOML file from `system/gentoo/config.example.toml`,
-   then run the original bootstrap with the continuation selected:
+Use an entirely separate target/run directory and fresh images for acceptance.
+Changing flags in the repaired base cannot retroactively optimize its packages.
+Backup creation and its boot test remain required operational work; repository
+unit tests do not perform them.
+
+## VM: original bootstrap through installed base
+
+1. **Host:** choose a new target directory. The following is a complete fresh-run
+   example, without prebuilt package or early-stage seeds:
 
    ```sh
-   ./rootfs.py --qemu --cores 18 --qemu-ram 49152 \
-     --extra-builds gentoo --gentoo-config my-gentoo.toml \
-     ...existing bootstrap arguments...
+   cp system/gentoo/config.example.toml my-gentoo.toml
+   # Edit my-gentoo.toml, especially concurrency and layout.
+   ./rootfs.py --qemu --target target-gentoo-fresh \
+     --cores 18 --qemu-ram 49152 --target-size 32G \
+     --extra-builds gentoo --gentoo-config my-gentoo.toml
    ```
 
-   The host validates and embeds the input bundle, prepares workspace, scratch,
-   encrypted-root, and `/extra` images under `target/gentoo-run`, then launches
-   the original bootstrap. The launcher prints a `socat` console command and
-   writes `target/gentoo-run/console.log`. Its final `/after` hook starts
-   `gentoo.sh build`.
-   When the guest shuts down at the printed modern-kernel milestone, continue
-   from the host with:
+   The host prepares images under `target-gentoo-fresh/gentoo-run`, records the
+   original QEMU arguments, prints the serial connection command, and captures
+   `console.log` in that run directory. The original bootstrap's final hook
+   starts the Gentoo build automatically. Keep the recorded CPU model unchanged
+   throughout the run, including resume and installed boots.
+
+2. **Guest root console:** at `SHUTDOWN MILESTONE`, use the **exact printed**
+   `cd /; bash .../shutdown.sh` command. The message does not itself power off.
+   The helper stops the verified DHCP daemon, unmounts children before parents,
+   and refuses poweroff if mounts remain busy. Do not exit the PID-1 Bash shell
+   or kill QEMU as the normal shutdown procedure. Wait for QEMU to exit.
+
+3. **Host, VM stopped:** cold-boot the saved modern kernel:
 
    ```sh
    sudo python3 system/gentoo/vm.py continue \
-     --run-dir target/gentoo-run --apply
+     --run-dir target-gentoo-fresh/gentoo-run --apply
    ```
 
-   In the new guest, mount the workspace as `/build` if needed and run the
-   printed resume command. Completed receipts make that command safe to repeat.
-
-2. **T440p:** populate `hardware_disks` with observed whole-disk identities,
-   then invoke the existing bare-metal bootstrap with the same opt-in:
+   The launcher verifies the handoff and kernel source signature. **Guest root:**
 
    ```sh
-   ./rootfs.py --bare-metal --extra-builds gentoo \
-     --gentoo-config my-t440p.toml ...existing bootstrap arguments...
+   /usr/local/sbin/gentoo-resume
    ```
 
-   Boot the generated image using the current boot procedure and the existing
-   ext4 workspace. The continuation validates the workspace and hardware disk
-   identities, then builds through the same shutdown milestone. Boot the saved
-   modern kernel with the documented continuation-root command line and resume
-   from the workspace. No hardware disk is initialized by `rootfs.py`.
+   This bootstrap-root entry works before `/build` is mounted. It verifies its
+   helpers, mounts virtual filesystems and the recorded workspace UUID, checks
+   the immutable source bundle, restores wired DHCP/DNS, and invokes the durable
+   build. It verifies the running kernel and CPU inputs before continuation.
+   The build proceeds through native CPU detection, Gentoo toolchains,
+   multilib `@system`, and base runtime packages. After an interrupted build,
+   rerun this entry on the modern bootstrap kernel.
 
-## Manual VM lifecycle reference
-
-The integrated `rootfs.py` command above validates, embeds, and launches the
-same inputs automatically. Use these manual steps when preparing a standalone
-continuation image or recovering a run whose original image was created without
-`--extra-builds gentoo`.
-
-1. **Host:** copy/edit `config.example.toml` and prepare a new input bundle:
+4. **Guest root, base runtime complete:** select the recorded immutable bundle
+   and inspect the installation proposal:
 
    ```sh
-   python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode vm --output /tmp/gentoo-inputs-v7
+   inputs=$(cat /build/gentoo-bootstrap/current-inputs)
+   driver=/build/gentoo-bootstrap/inputs/$inputs/gentoo.sh
+   bash "$driver" status
+   bash "$driver" plan
    ```
 
-2. **Host, previous VM stopped:** put the original rootfs.py QEMU argument array
-   in `initial-qemu.json`, once. Use actual absolute image/kernel paths and the
-   CPU/RAM selected by your original invocation. See the example below. Prepare
-   a private run directory (first without `--apply` to inspect the plan):
+   Verify that the target is the run's root image and that boot, workspace,
+   scratch and extra remain distinct. The plan does not initialize storage.
+
+5. **Guest root, destructive boundary:** initialize the new root image:
 
    ```sh
-   sudo python3 system/gentoo/vm.py prepare --run-dir OUT/gentoo-run \
-     --config my-gentoo.toml --qemu-command initial-qemu.json --apply
-   sudo python3 system/gentoo/vm.py start --run-dir OUT/gentoo-run --apply
+   bash "$driver" storage-init
    ```
 
-3. **Guest:** after the original bootstrap completes, transfer the complete
-   `/tmp/gentoo-inputs-v7` directory into the guest, preserving all files. Run:
+   Review the displayed identity and type the exact `ERASE <serial> <major:minor>`
+   confirmation. This creates GPT, LUKS2, LVM and root/home/swap filesystems;
+   passphrases are prompted interactively. After interruption, inspect `plan`
+   and use **`storage-resume`**, never another initialization:
 
    ```sh
-   bash /tmp/gentoo-inputs-v7/gentoo.sh build
+   bash "$driver" plan
+   bash "$driver" storage-resume
    ```
 
-   The driver builds/resumes batches 1–7 and prints **SHUTDOWN MILESTONE** after
-   verifying the kernel, matching modules, inputs and saved post-reboot scripts.
+   Completed volumes are preserved. Ambiguous format-start state stops for
+   inspection. Do not edit receipts to force progress.
 
-4. **Guest console, explicit shutdown:** substitute the exact handoff path
-   printed by the driver. Do not exit the PID-1 Bash shell:
+6. **Guest root:** install or resume copying/configuring the base:
 
    ```sh
-   cd /
-   bash /build/gentoo-bootstrap/handoff/INPUT_DIGEST/shutdown.sh
+   bash "$driver" install-root
    ```
 
-   Wait for the host's foreground QEMU command to return. No build command or
-   error trap automatically shuts down, restarts or kills the VM.
+   This prompts for the unlock passphrase and account passwords, configures
+   the installed system, and publishes kernel/initramfs artifacts and receipts.
+   It does not reformat completed storage. From `/`, run the handoff shutdown
+   command printed in step 2, then wait for QEMU to exit.
 
-5. **Host:** extract/verify the saved kernel and cold-boot it using the recorded
-   resources and actual image paths, without repeating configuration settings:
+7. **Host:** boot the installed kernel/initramfs:
 
    ```sh
-   sudo python3 system/gentoo/vm.py continue --run-dir OUT/gentoo-run --apply
+   sudo python3 system/gentoo/vm.py boot-installed \
+     --run-dir target-gentoo-fresh/gentoo-run --apply
    ```
 
-6. **Guest:** mount the workspace and use its recorded handoff:
+   **Installed guest:** unlock encrypted root and log in as the configured user.
+   Complete the checks below, reboot cleanly with `sudo reboot`, and repeat the
+   boot/login checks. QEMU directly loads the installed kernel/initramfs using
+   the tested LUKS/LVM command line; this does not exercise hardware firmware.
+
+## T440p: preflight and gated base workflow
+
+1. **Read-only rescue/live Linux on the actual T440p:** retain a usable rescue
+   medium and verify that it can boot, see the disks, and unlock existing data.
+   Record the currently working firmware boot commands before making changes.
+   Collect identities and resources without formatting or changing partitions:
 
    ```sh
-   mkdir -p /build
-   mount -t ext4 -L GENTOO_BUILD /build  # omit if already mounted
-   version=$(cat /build/gentoo-bootstrap/current-handoff)
-   bash /build/gentoo-bootstrap/handoff/$version/resume.sh
+   lsblk -d -b -o NAME,SIZE,SERIAL,WWN,MODEL
+   ls -l /dev/disk/by-id
+   lscpu
+   ip -br link
+   ip route
+   df -h
    ```
 
-   Substitute your configured label. The resume script mounts proc/sysfs/devpts/tmpfs as
-   needed, restores IPv4 networking with dhcpcd, and runs the exact saved input
-   snapshot. If DHCP times out, check the network link and retry the resume
-   script. The driver rechecks outputs
-   and verifies Linux 6.12.111, x86_64, a boot ID different from the kernel's build boot, and the GNU build ID
-   from `/sys/kernel/notes` matching the saved vmlinux build ID. It then completes
-   the multilib C/C++ toolchain and executes both ABIs (batch 4), then builds
-   the pinned repository, host Python and Portage configuration (batch 5),
-   constructs the native compiler and runtimes (batches 6–7), bootstraps Gentoo's
-   multilib `@system` (batch 8), and installs the encrypted-base runtime policy
-   (batch 9). Package emerge begins in batch 8. After an interruption, repeat
-   steps 5–6; completed stages keep their receipts.
+   Read the chosen whole disks' `/sys/class/block/NAME/device/model`, `serial`
+   and `wwid` attributes where present, and reconcile them with the configured
+   identity. Kernel model strings may be shorter than udev marketing names.
+   Configure root and extra **serial, capacity bounds, WWN and canonical model**,
+   plus protected boot-medium serial/capacity. All three disks must differ.
+   Discovery requires one unique sysfs identity match; missing by-id links are
+   supported, conflicting links refuse. `udevadm trigger` is not proof of identity.
+   Use actual-target CPU detection, check wired DHCP/DNS, storage, USB, keyboard,
+   display and rescue access. Observe existing workspace UUID, free space and
+   backing disk. The workspace must already be writable ext4; this procedure
+   does not create it. Do not initialize `/extra` during the base stage.
 
-## Manual T440p image and continuation reference
-
-1. **Host:** fill `hardware_disks` with observed whole-disk by-id paths, serials
-   and capacity bounds; optionally constrain root/extra model and WWN. Root,
-   boot medium and extra disk must differ. Prepare/transfer a hardware bundle:
+2. **Acceptance gate:** complete the fresh VM acceptance list below and review
+   the read-only T440p preflight before recommending destructive hardware
+   installation. The remaining steps describe that later authorized run.
+   **Host:** prepare a new hardware bootstrap image with observed identities:
 
    ```sh
-   python3 system/gentoo/prepare.py --config my-gentoo.toml \
-     --mode hardware --output /tmp/gentoo-hardware-inputs-v7
+   cp system/gentoo/config.example.toml my-t440p.toml
+   # Fill hardware_disks and the existing workspace UUID; review all settings.
+   python3 system/gentoo/prepare.py --config my-t440p.toml \
+     --mode hardware --output /tmp/gentoo-t440p-inputs
+   ./rootfs.py --bare-metal --target target-t440p-fresh \
+     --extra-builds gentoo --gentoo-config my-t440p.toml
    ```
 
-2. **T440p bootstrap environment:** with `/proc`, `/sys`, device links and the
-   existing workspace available, run:
+   Follow the original bootstrap's image/media instructions and existing rescue
+   route. Writing boot media is itself destructive to that medium and requires
+   a separately verified device choice. No generic `dd` target is implied here.
+   Boot on the T440p using its existing firmware route. The embedded after-hook
+   starts the Gentoo build; hardware CPU detection runs on this machine.
 
-   ```sh
-   bash /tmp/gentoo-hardware-inputs-v7/gentoo.sh build
-   ```
-
-   The driver checks the workspace disk's by-id, serial, capacity and optional
-   model/WWN before mounting it. It stops at the same shutdown milestone.
-
-3. **T440p console:** run the printed handoff's `shutdown.sh` from `/`, as in VM
-   step 4. On a trusted host, mount the now-offline workspace and verify its
-   source signature before booting the new kernel:
+3. **T440p bootstrap root:** at the modern-kernel milestone use the printed
+   shutdown command. With the workspace offline, a trusted host can verify the
+   kernel source/signature:
 
    ```sh
    python3 system/gentoo/kernel_source.py --build-root MOUNT/gentoo-bootstrap
    ```
 
-4. **T440p existing boot environment:** use the currently working bootloader's
-   existing manual Linux-boot procedure to load the saved
-   `gentoo-bootstrap/artifacts/kernel-6.12.111/bzImage`. If it cannot read the
-   workspace, copy the verified image to the existing boot medium. Pass
-   `root=UUID=ACTUAL_BOOTSTRAP_ROOT_UUID rootfstype=ext4 init=/bin/bash rw rootwait`
-   and the usual console arguments. This boots the existing bootstrap root,
-   not the future encrypted installation. An already enforced signing policy
-   must use its existing authorized signing procedure. This batch supplies no
-   policy bypass, new firmware, signed-generation manager or hardware boot edit.
+   Replace `MOUNT` with the read-only workspace mount. Use the existing firmware
+   Linux-boot commands to load
+   `gentoo-bootstrap/artifacts/kernel-6.12.111/bzImage` from that workspace, or
+   its verified copy on the existing boot medium. Keep the bootstrap root UUID:
 
-5. **T440p new kernel:** follow VM step 6 with the workspace's configured label.
-   Wired e1000e, essential storage, console/input and USB drivers are built in;
-   Wi-Fi firmware is introduced with the runtime policy in batch 9. Validate
-   actual T440p devices separately; VM support does not establish hardware
-   acceptance. Batch 11 installs the signed generation manager, but it does not
-   modify existing firmware. Follow [SIGNED-GENERATIONS.md](SIGNED-GENERATIONS.md)
-   for the hardware-specific key setup and acceptance boundary.
+   ```text
+   root=UUID=ACTUAL_BOOTSTRAP_ROOT_UUID rootfstype=ext4 init=/bin/bash rw rootwait
+   ```
 
-## Recorded VM invocation and image ownership
+   Add the existing console arguments. Record the actual UUID; this command
+   line boots the bootstrap root, not the future encrypted root. After cold
+   boot, run `/usr/local/sbin/gentoo-resume` as root.
 
-Example `initial-qemu.json` for an original run WITHOUT `--kernel` (replace the
-paths and resource values with the actual original arguments):
+4. **T440p bootstrap root:** after the base runtime completes, follow VM steps
+   4–6 with this run's durable bundle. **`storage-init` erases the configured
+   physical root disk.** Recheck serial, WWN, model and capacity at the prompt.
+   Resume interrupted storage with `storage-resume`; install with `install-root`.
+   Keep the workspace and protected boot medium intact.
 
-```json
-["qemu-system-x86_64", "-enable-kvm", "-m", "49152M", "-smp", "18",
- "-drive", "file=/ABS/BOOTSTRAP/init.img,format=raw",
- "-drive", "file=/ABS/BOOTSTRAP/external.img,format=raw",
- "-machine", "kernel-irqchip=split", "-nic", "user,ipv6=off,model=e1000",
- "-no-reboot", "-nographic"]
-```
+5. **T440p existing firmware route:** use the installed boot artifacts and the
+   LUKS/LVM command line recorded in the workspace's
+   `gentoo-bootstrap/install-base-state/installed-boot.receipt`. Arrange access
+   to those verified artifacts through the already working unsigned boot route;
+   do not guess a GRUB device number or copy the bootstrap-root command line.
+   Unlock, log in, verify the base, and reboot cleanly. This is a separate
+   hardware acceptance result. Firmware flashing and signing enforcement are
+   excluded from this workflow.
 
-Omit the second drive if the original run had no external image. With
-`--kernel`, retain the actual `-kernel`, `-initrd` if present, and `-append`
-arguments; the original root selector is retained for continuation. Otherwise
-it defaults to the reference's `/dev/sda1`. Relative paths resolve once against
-`--qemu-cwd` (default: current directory). The normal rootfs.py argument forms
-are supported; ambiguous drive/index syntax, firmware and monitor/serial
-customizations fail explicitly. Initial disks are raw or standalone qcow2 IDE
-images; external backing chains and host block devices are rejected.
+## Base acceptance and recovery
 
-`gentoo-vm.json` records the original argument array/cwd, CPU/RAM, normalized
-launch options, actual absolute paths, capacities, generated serials and real
-filesystem UUIDs. `start` retains the original boot inputs and adds the four
-managed disks using the reference-compatible USB EHCI storage transport.
-`continue` replaces the original kernel/initramfs/append with the saved modern
-kernel and an explicit `init=/bin/bash` bootstrap-root command line. The VM
-has no Libreboot, custom ROM, signing or hardened-GRUB dependency.
+A fresh replay must use the ordinary repository procedure with no pasted
+repairs, guest-only source fixes or edited receipts. Record run ID, repository
+commit, TOML, CPU exposure and logs. Exercise interrupted build resumption after
+the modern handoff and interrupted storage/install resumption. Preserve
+completed volume UUIDs and verify that resumption does not reformat them.
+Unexpected failures require source fixes and review, followed by repetition of
+affected gates from appropriate clean inputs.
 
-Original disks are never created or resized by this helper. `--target-size`
-still belongs to the original bootstrap. For an existing manual workspace,
-place the image at `RUN/images/workspace.img` while offline; prepare validates
-its capacity/type/label, checks any configured workspace UUID, and records its
-actual UUID. The same validation/adoption applies to an existing scratch
-image without asking for a scratch UUID. Subsequent preparations reuse the
-recorded identities. Existing run metadata/image sizing cannot be changed
-silently; retain that run and use a new run directory for a different layout.
-
-Image preparation records identities before creating missing images. New images
-are initialized under unique `.pending-*` names, verified and fsynced, then
-published exclusively without replacing a target. An interruption can leave an
-unpublished pending file; inspect/remove it separately. Resume validates existing
-final images and creates only missing ones. The helper refuses loop-attached or
-open images, duplicate inodes/roles, symlinks, format/backing/size mismatches,
-filesystem identity mismatches and unclean workspace/scratch filesystems. It
-does not run repair operations. A dirty filesystem requires offline inspection
-and deliberate repair before reuse.
-
-All lifecycle commands default to a plan except `status`. `--apply` authorizes
-creation/launch; a lifecycle `flock` serializes operations and remains held while
-QEMU runs. `status --run-dir OUT/gentoo-run` prints the record and lock state.
-A surviving QEMU is still caught by open-image checks if its parent dies. Stale
-socket files require inspecting their owner before manual removal. The helper
-never stops an unrelated VM or force-quits a running guest.
-
-The helper prints a `socat` serial command, records stdout/stderr from the guest
-in `console.log` through QEMU's chardev, and saves the exact last executed argv
-in `last-launch.json`. A serial client may detach without ending QEMU/logging.
-The original 32-bit kernel can use less memory/address space than the recorded
-VM RAM; cold booting x86_64 makes the larger resource allocation usable without
-changing it in TOML or resupplying it to the continuation command.
-
-## Configuration schema
-
-`config.example.toml` is the complete schema and defaults. Unknown sections or
-keys fail validation, including removed `build.profile`, `[vm]`, `[vm_disks]`,
-VM CPU/RAM fields, and `workspace.scratch_uuid`. Partial TOML files inherit all
-omitted defaults. Types are exact (a Boolean is not an integer). Numeric values
-must be positive and finite; Portage load average accepts a float. Control
-characters are forbidden in all strings.
-
-| Section | Meaning and validation |
-| --- | --- |
-| `build` | `source_jobs`: make parallelism for source builds before Portage. |
-| `portage` | `jobs`: emerge concurrent packages; `load_average`: emerge load limit; `make_jobs`: MAKEOPTS `-j`. Independent settings, applied when Portage is introduced. |
-| `system` | Separate login account, hostname/FQDN, locale, keymap, timezone, weak-password policy and VG name. Names are constrained; path-like values cannot traverse parents. |
-| `layout` | Root, swap, snapshot reserve and minimum home sizes, in GiB. Home will receive remaining allocatable capacity. Reserve remains unallocated for generations. |
-| `workspace` | Filesystem label, optional existing UUID, network interface. Label discovery must produce exactly one device. Scratch UUIDs will be discovered/generated by host preparation. |
-| `images` | Workspace 128, scratch 128, root 500 and extra 128 GiB defaults. Planned root capacity is max(root image size, sum(layout) + 2 GiB metadata allowance). Host preparation owns VM image creation; target disk initialization remains explicit in the guest. |
-| `hardware_disks` | Whole-disk by-id paths, serials, optional model/WWN, inclusive capacity ranges in bytes. Identities required only for hardware; all ranges are checked for consistency. |
-| `packages` | Optional base/desktop lists, USE/license/keyword/mask policies and firmware selection. Relative paths resolve beside the operator's TOML, are checked to exist, and are copied to `policy/KEY` in the bundle. Empty values select defaults introduced by later batches. |
-
-The preparer quotes every value with `shlex.quote`, exports only fixed variable
-names, and renders package paths as bundle-relative names. Original host paths
-and TOML are not needed at runtime. Generated `config.sh` uses the predictable
-`GENTOO_SECTION_KEY` naming convention plus `GENTOO_MODE`.
-`config.inputs.sh` omits only build/Portage concurrency settings, so operational
-tuning can change without changing source/configuration fingerprints. Policies
-must be included by content in the stages that consume them.
-
-## Durable state and resumption
-
-`prepare.py` copies its explicit `BUNDLE_FILES` list, optional policy files, two
-configuration renderings, and `SHA256SUMS` into a new output directory. It never
-overwrites an existing output. Each future batch must extend that list for the
-runtime artifacts it introduces. SHA256 checks verify content integrity; the
-bundle must come from your reviewed checkout.
-
-The driver verifies the manifest before use, then copies only listed inputs to
-`inputs/SHA256_OF_MANIFEST/` on the workspace. It verifies the copy, flushes it,
-and publishes the directory by rename. Older snapshots are preserved.
-`current-inputs` is replaced atomically only after verification. Incomplete
-`.pending.*` directories can remain after interruption; they are never resumed
-as valid snapshots and no completed snapshot is overwritten.
-
-Each run creates `logs/run-UTC_TIMESTAMP.UNIQUE`, captures both output streams,
-and waits for the logger before exiting. Early failures before the workspace
-is checked are reported to the caller's terminal. State lives in `state/`.
-The input milestone has a receipt per input snapshot, so adding later scripts
-or changing concurrency creates a new snapshot without invalidating compiler
-receipts. `status` lists receipt paths; `build` verifies outputs while resuming.
-A checksum of the entire snapshot is never a compiler-stage fingerprint.
-
-The shared stage helper takes explicit recipe/source/config/prerequisite inputs.
-Paths used to hash recipes must be stable relative paths from the snapshot,
-not its content-addressed absolute directory. A compiler stage includes its
-recipe, relevant helper files, selected source locks and prerequisite receipts.
-Include semantic configuration and consumed
-policy content only when that stage actually consumes them. These initial
-compiler recipes use no account/storage/package choices; their only TOML input
-is operational source concurrency, which is excluded from fingerprints.
-Documentation and later stages stay out of that list. A changed fingerprint or failed output
-check stops for inspection rather than silently mixing incompatible builds.
-
-Before starting, each stage flushes and atomically records a `.inputs`
-fingerprint. Interrupted work can resume only with those same inputs; a recipe
-edit cannot silently reuse a half-configured Makefile. A stage runs sequential
-commands under `errexit`, verifies its actual outputs, then flushes and renames
-a `.done` receipt atomically. Failed stages have no completion receipt.
-Out-of-tree builds resume with make; partial installations are repeated into
-the same workspace. A later stage must supply both a repeatable action and a
-meaningful output verifier. There is no legacy experimental receipt migration.
-
-The driver holds `flock` on a stable inode for its lifetime and its build
-children. Kernel process cleanup releases it after the last holder exits;
-no stale PID directory or reboot is needed. The lock file itself is never
-unlinked. A still-running child retains the lock after its parent dies, so
-inspect/stop that process before resuming. Concurrent drivers fail immediately.
-
-Source helpers accept pinned SHA256 or SHA512, verify cached archives on every
-use, download into a unique partial file, verify before publication, and refuse
-a corrupted cache instead of replacing it silently. Single-source locks keep
-future downloads out of earlier-stage fingerprints. Extraction publishes a
-complete tree by rename and records its exact lock entry in `.source-pin`.
-Interrupted `.unpack.*` directories are ignored; a tree with a missing/mismatched
-pin is rejected. Argp generates its configure script within its extracted tree.
-See [SOURCES.md](SOURCES.md) for versions, provenance, and source-check evidence.
-
-## Checks and acceptance boundary
-
-From the repository root:
+After installed boot, check login and sudo, the configured locale/timezone,
+wired connectivity and DNS, encrypted root/home/swap activation, and both ABIs:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_gentoo*.py' -v
-for script in system/gentoo/gentoo.sh system/gentoo/lib/*.sh system/gentoo/stages/*.sh \
-    system/gentoo/post-reboot.sh system/gentoo/shutdown.sh; do
-  bash -n "$script" || exit
-done
+sudo -v
+locale
+date
+ip -br address
+ip route
+getent hosts gentoo.org
+findmnt /
+findmnt /home
+sudo swapon --show
+sudo cryptsetup status gentoo-crypt
+sudo lvs
+sudo python3 /usr/local/libexec/gentoo-continuation/cpu-policy.py \
+  --receipt /etc/portage/native-cpu-policy.json \
+  --detector /usr/bin/cpuid2cpuflags --compiler /usr/bin/gcc
 ```
 
-Tests use disposable ordinary directories: configuration rejection and shell
-injection, relative policy copying, reproducible manifests, semantic concurrency
-handling, durable snapshot survival/corruption, receipt output verification and
-changed-input refusal, failed-stage resumption, lock contention/SIGKILL release,
-source-cache integrity, and missing/ambiguous workspace rejection. They do not
-exercise a real guest mount or a complete bootstrap. Full VM replay remains an
-acceptance requirement after final integration; hardware acceptance is separate.
-
-## Batch 2 build stages and acceptance
-
-`build` now continues after the durable-input milestone. Prepare a **new** host
-bundle as in the command sequence and transfer it to the guest; an older saved
-batch-1 snapshot intentionally still runs its original batch-1 code. Start the
-new bundle once to select it as `current-inputs`. Previously saved inputs and
-logs remain on disk. A batch-1 workspace with no compiler outputs can be reused;
-experimental workspaces and their receipts are not imported.
-
-| Stage | Commands/transition | Verified outputs |
-| --- | --- | --- |
-| 10 | Check original source-built host compiler, libraries and build tools | Host C library and C++ compile/run probes; stable host input identity |
-| 11 | Configure/make/install binutils for `x86_64-elf` | Real x86_64 assembly and relocatable link |
-| 12 | Configure C-only bare GCC without target headers or shared runtimes; `all-gcc all-target-libgcc` | Exact compiler version/triple, ELF64 object and libgcc archive |
-| 13 | Source-build argp, then static libelf, then feature-limited rsync | Host compile/link/run checks for argp/libelf and a real rsync copy |
-| 14 | Linux `headers_install` with explicit x86_64 architecture, separate output tree and source-built rsync | Pinned Linux version and x86 32/64 UAPI syscall headers |
-| 15 | Build Linux-target binutils with explicit `=/...` sysroot search paths; install both triplet aliases | i386 emulation, all six rooted library directories, usable tool aliases |
-| 16 | Build/install multilib C front end with `all-gcc`; defer libgcc until startup objects exist | GCC 16.2.0, correct Linux triple, reported m32/m64 multilibs and real ELF32/ELF64 objects |
-| 17 | Separate i686 then x86_64 glibc configure trees; `install-headers`, upstream generic stubs template, `csu/subdir_lib` and temporary empty libc link targets | Correct-class real startup objects and audit copies of temporary source-built libc DSOs |
-| 18 | Header-aware shared/multilib C compiler, then both libgcc ABIs | Every archive member and shared runtime has the expected ELF class/machine; no-libc division link probes |
-| 19 | Finish real i686 glibc, then x86_64 glibc, using their existing build trees | ABI-specific stubs, libc linker scripts, ELF libc/loader files and startup objects; canonical i386 loader symlink |
-| 20 | Refresh C libgcc against completed glibc, then compile/link stdio programs for both ABIs | Compiler sysroot, both runtimes, libc dependencies and `/lib/ld-linux.so.2` or `/lib64/ld-linux-x86-64.so.2` interpreter |
-
-The implementation preserves the reference's cycle-breaking sequence. Glibc
-2.44 has no `install-bootstrap-headers` target, so the temporary `gnu/stubs.h`
-is the exact upstream generic template; no `stubs-32.h` or `stubs-64.h` is
-fabricated. Real glibc installations replace the temporary libc DSOs and
-headers. Earlier-stage verifiers accept those intended replacements while
-still checking their original audit outputs and actual startup-object ABIs.
-
-The libgcc wrapper chooses `/usr/lib32` or `/usr/lib64` from each invocation's
-`-m32`/`-m64`, supplies its startup-object `-B` path to GCC's own xgcc, and is
-bound into generated recursive libgcc Makefiles. This prevents either ABI from
-accidentally using the other's startup files. External probes use the same
-ABI-specific `-B` paths. C++ runtimes and further intermediate-compiler search
-fixes belong to batch 4 after the modern-kernel boot.
-
-Glibc's per-file `CFLAGS-libc_sigaction.c` disables compiler-generated
-asynchronous unwind tables while retaining the handwritten signal-restorer
-CFI. Host elfutils builds only its internal support and static libelf archive;
-the fts/obstack configure cache answers apply only to those selected targets.
-The build never installs a host shared libelf. The scripts do not run package
-test suites; compile/link checks here are explicit acceptance probes.
-
-Everything is below `/build/gentoo-bootstrap`: `toolchain/` contains the bare
-compiler; `linux-target-binutils/` and `linux-target-tools/bin/` hold Linux tools
-and aliases; `linux-toolchain/` holds the C compiler/runtimes; `host-tools/`
-holds argp, static libelf and rsync; `sysroot-x86_64/` holds the GNU headers,
-loaders and libraries. `build/` retains resumable object trees and `probes/`.
-`distfiles/` is the verified source cache. Source trees stay in `sources/`.
-No installed root or target disk is modified.
-
-`build.source_jobs` controls source make parallelism. None of the three Portage
-settings is consumed before Portage exists. Changing concurrency creates a new
-input snapshot but preserves compiler fingerprints; locale/account/layout
-changes also do not alter these compiler recipes because they are not consumed
-here. The next batches will fingerprint those choices where they matter.
-
-Both VM and hardware runs may still be using the original 32-bit kernel at
-this point. The acceptance probes compile/link ELF64 and ELF32 but execute
-neither target ABI. Successful linking is not a runtime-execution claim;
-both real execution checks follow the x86_64 kernel handoff in batch 4. No
-kernel is built and no shutdown/reboot is requested in batch 2.
-
-Batch 2 verification includes disposable real ELF objects and mixed-ABI
-archive rejection, rooted-linker-path rejection, SHA512/cache checks, interrupted
-extraction and changed-recipe refusal, bundle completeness and dependency order.
-A native smoke build exercises pinned rsync and Linux UAPI header export. It
-is not a fresh musl-host compiler/glibc rebuild or a guest boot. Complete VM
-replay remains required after original-bootstrap integration.
-
-## Batch 3 kernel, modules and durable handoff
-
-Stages 30–32 extend the bundle list without changing batch-2 compiler recipes,
-locks or shared toolchain/state helpers. Adding this batch does not invalidate
-completed compiler receipts. Transfer a new v3 bundle and enter through that
-copy once; an old saved input snapshot intentionally still runs its old code.
-
-Stage 30 uses the pinned Linux source in a separate `build/linux-continuation`
-output directory. It merges `x86_64_defconfig` with the shipped fragment, runs
-noninteractive `olddefconfig`, and requires every requested y/m/disabled/string
-setting to survive resolution. It builds `bzImage` with the Linux/GNU C cross
-compiler and original host GCC plus static libelf. The artifact records its
-configuration, System.map, exact release, GNU build ID, build boot ID and a kernel-only
-checksum manifest. Boot-protocol magic and the x86_64 flag are checked.
-
-Stage 31 builds and installs modules from that same configuration and verifies
-all `.ko` files as ELF64/x86_64 with matching vermagic. Essential root/storage,
-USB, console, IA32 execution and T440p drivers are built in; coretemp supplies
-an explicit loadable module. Source/build symlinks are removed from installed
-modules. The final relative-path manifest covers the kernel, configuration and
-module files. Dependency indexes are deferred until source-built depmod is
-available during root installation; no external host depmod is imported.
-
-Stage 32 stores `handoff/INPUT_DIGEST/{handoff.json,resume.sh,shutdown.sh}`.
-The JSON binds the input digest, filesystem UUID, build boot ID, release,
-artifact manifest and kernel/module receipt hashes. `current-handoff` is
-published atomically only after those files verify. Every post-reboot command,
-configuration and build input is on the workspace before shutdown, independent
-of `/steps`, temporary transfer directories and the install medium. An
-interruption between handoff publication and its receipt compares/reuses the
-same content rather than overwriting a different transaction.
-
-On continuation, the host requires a clean, offline ext4 workspace, mounts it
-with `ro,noload,nosuid,nodev,noexec`, verifies the input and kernel/module
-manifests, stage receipts and handoff identities, verifies the upstream source
-signature with the retained public key, and stages the kernel under
-`kernels/ARTIFACT_MANIFEST_SHA256/INPUT_DIGEST/`. It always unmounts on an extraction failure.
-The staged image is checked again against the workspace before use. The saved
-configuration/manifest, handoff and source-signature receipt accompany it.
-
-`shutdown.sh` is explicit and bootstrap-specific. It relocates itself to `/run`
-so Bash's open script cannot keep `/build` busy, blocks new drivers with a
-sentinel, and refuses a held driver lock. It syncs, closes the workspace lock,
-unmounts non-root ext filesystems, remounts root read-only, checks no writable
-disk filesystem remains, then requests SysRq poweroff. Any failed unmount or
-remount stops before poweroff. If poweroff itself fails, inspect the console;
-after ensuring shutdown is no longer running, remove its `/run` sentinel and
-remount root read-write if resuming. There is no stale PID lock requiring a
-reboot.
-
-Batch 3 tests include real disposable ext4/qcow2 creation, unchanged image reuse,
-size refusal, publication failure, open-image/loop/inode checks, record/resource
-ownership, process locks, manifest/path safety, artifact/input/receipt tampering,
-read-only mount cleanup and synthetic x86 boot headers. A paused-CPU TCG
-smoke starts actual QEMU, queries its block devices over QMP, checks the exact
-image attachments, and quits before firmware/guest execution. It runs outside
-the Unix-socket restriction when required; that fixture is skipped if a
-sandbox denies the connection. The pinned real kernel
-source/signature and retained release key were checked with GPG. A new full
-kernel/module build, actual guest shutdown/cold boot and T440p devices are not
-accepted by those fixture tests. Complete fresh VM replay remains required
-after final integration; hardware acceptance remains separate.
-
-
-## Batch 4 multilib C/C++ completion
-
-For a workspace already completed with batch 3, prepare and transfer the new
-v4 bundle using the same mode/configuration, then invoke that new bundle's
-`gentoo.sh build` once in the verified modern-kernel guest. The old saved resume
-script intentionally runs its old snapshot. The new entry reuses the existing
-compiler and kernel receipts, selects a new durable handoff, and continues
-without another reboot if the running kernel passes the existing cold-boot
-and build-ID checks. Subsequent resumptions use the newly selected handoff in
-step 6. If still on the original kernel, this bundle stops at the shutdown
-milestone; it cannot enter stage 40 until that handoff succeeds. VM and T440p
-use the same compiler stages; neither path signs or modifies firmware here.
-
-The existing pinned GCC 16.2.0 source is verified again; no new archive/version
-or binary toolchain is introduced. The C++ build uses a separate
-`build/gcc-linux-cxx` object tree and the existing GNU sysroot. Its host compilers
-remain the original source-built `/usr/bin/gcc` and `/usr/bin/g++`. The modern
-kernel must support IA32 execution (the batch-3 fragment enables it). Source
-parallelism still comes only from `build.source_jobs`; Portage does not exist
-at this milestone.
-
-The visible order is:
-
-1. `40-gcc-cxx`: configure C/C++ with POSIX threads and m32/m64, generate and
-   bind GCC's target nm wrapper, build the front ends, and compile actual
-   template-bearing ELF32/ELF64 objects with `xg++`/`cc1plus`.
-2. `41-cxx-libgcc`: generate ABI-aware target compiler wrappers, bind recursive
-   libgcc Makefiles, remove only the two known generated ELF64 startup symlinks,
-   check each ABI's real glibc startup objects, and build/install libgcc plus
-   the C/C++ drivers. Shared runtime and private libgcc search directories are
-   passed explicitly to intermediate compilers; `--sysroot` alone is insufficient.
-3. `42-libstdcxx`: configure the target C++ runtime after shared libgcc exists,
-   correct only the generated libtool CXX tags with their ABI's complete startup
-   paths and wrapper, build/install libstdc++, and inspect both ABIs' shared and
-   static libstdc++ and libsupc++ archives. Upstream source trees stay unchanged.
-4. `43-runtime-acceptance`: compile/link/execute C and C++ for both ABIs through
-   both installed and intermediate drivers (eight executable probes). C exercises
-   libc and integer division; C++ exercises threads, allocation, strings, vectors,
-   iostreams and exception unwinding. Each executable's ELF class, interpreter
-   and needed libraries are checked. Execution must exit zero with exact output.
-
-The intermediate C++ probe queries the installed driver's include search for
-each ABI after libstdc++ installation. It passes the workspace-owned common,
-ABI-specific `bits/c++config.h`, and backward header directories explicitly to
-`xg++` with `-nostdinc++`. The compiler build-tree driver does not inherit the
-installed driver's C++ header paths. These acceptance-only settings live in
-`lib/runtime.sh` and do not change the completed compiler/library recipes.
-
-Execution invokes the source-built loader under `sysroot-x86_64/lib32` or
-`lib64`, with a clean environment, disabled loader cache and explicit library
-paths. Every resolved disk DSO must belong to this run's sysroot or toolchain
-and match the executable ABI. No GNU loader/library is copied into the bootstrap
-root's `/lib`. Probe programs and objects remain in `build/probes/cxx`; the
-append-only invocation log records loader resolutions and actual execution
-results. The `43-runtime-acceptance.done` receipt is published only after all
-checks pass and reruns all eight probes on every resume.
-
-Each of the four stages binds its recipe/helpers and prerequisite receipt;
-stage 40 also binds the GCC source lock and completed sysroot links. Interrupted
-builds retain their object trees and input bindings. Changed unfinished recipes
-are refused; do not remove receipts to force reuse. Changing source-job counts,
-documentation or later-stage scripts does not invalidate these builds. Earlier
-compiler/kernel recipes and locks remain unchanged. The batch-3 handoff recipe
-now exposes its verified boot gate to the driver; its content-addressed receipt
-naturally belongs to the newly selected bundle.
-
-Focused tests cover generated nm/libgcc/libtool rules, idempotent ABI token
-replacement, unexpected startup-object refusal, last-ABI-option wrapper behavior,
-the pre-build boot gate, and loader isolation and execution failures. Disposable
-native C/C++ programs exercise the real loader and C++ runtime, including threads
-and unwinding. These fixtures use the host runtime and do not establish a full
-GCC 16.2.0/glibc 2.44 guest build or accept the kernel handoff. A fresh complete
-VM build/reboot through this milestone remains required in the final replay.
-
-
-## Batch 5 Gentoo source snapshot and Portage host
-
-After batch 4 passes all eight runtime probes, transfer a fresh v5 bundle with
-the same mode and configuration and invoke `gentoo.sh build` in the verified
-modern-kernel guest. Earlier compiler receipts remain reusable; the new input
-snapshot takes a new handoff identity and proceeds without another restart.
-An invocation before the modern-kernel check stops at the saved shutdown
-milestone and cannot fetch or build batch-5 sources.
-
-Stage 50 fetches or verifies the SHA-512-pinned Gentoo repository archive at
-commit `5548522e2c2fa10a4c009348e9ba84c44783f47d`. It verifies the repository
-identity, the pinned Portage ebuild's Python compatibility and the selected
-amd64 desktop profile. It stores a sorted checksum record for every `Manifest`
-under `state/gentoo-manifests-COMMIT.sha256`; a second receipt covers the full
-extracted tree, including file modes and symlink targets. Repository input
-lives under `sources/`; downloaded archives live in `distfiles/`. Stage 52 checks
-the full tree before and after the Portage self-check. The emerge helper checks
-all Manifests before and after each later package operation. A changed, missing
-or added Manifest stops the driver and leaves a `.changed` diagnostic beside
-the baseline.
-
-Stage 51 first fingerprints the bootstrap OpenSSL/zlib development headers and
-libraries needed by CPython's native modules. It then builds bzip2 1.0.8 and
-CPython 3.12.15 from pinned sources into `host-tools/`, using the original
-bootstrap's native GCC. It runs `make` and
-`make install`, not Python's test suite. The acceptance check verifies the
-version and imports `bz2`, `ssl`, `zlib`, `hashlib`, `json` and `urllib`; bzip2
-compression must round-trip. Python's configure-time compiler wrapper corrects
-only the host's musl multiarch query. Build parallelism uses
-`build.source_jobs`, independently of all Portage concurrency values. The
-Python and bzip2 sources and their build tree remain available for resumption.
-
-Stage 52 verifies Portage 3.0.82.2 from its own pinned archive and checks its
-ebuild against the repository snapshot. The reviewed desktop profile and
-`repos.conf` point at that snapshot. `make.conf` sets `FEATURES` to disable
-package tests and binary packages, disable Manifest generation, and require
-strict digest checking. It leaves Portage's `--jobs`, `--load-average`, and
-`MAKEOPTS=-j` connected to the three independent TOML settings. Distfiles and
-temporary build data stay on the workspace. Generated configuration is
-refreshed on each invocation, so concurrency can change without invalidating
-completed source builds.
-
-This first host configuration creates a `portage` group and non-login account
-with GID/UID 250 in the temporary bootstrap guest if those IDs are free. An
-existing conflicting account or ID causes a stop. No account is created in the
-future installed root. The `emerge` helper checks repository Manifests before
-and after every future Portage operation, forces source-only package selection,
-and rejects binary-package or concurrency overrides. It also provides an
-executable probe against Portage's strict `digestcheck`: a valid SHA-512 source passes, corrupted
-bytes, missing source files and size-only entries fail, and the Manifest stays
-unchanged. This probe exercises source integrity handling; it does not run an
-ebuild test phase.
-
-The stage receipts bind each source lock, builder, audit code and required
-prior-stage receipt. Completed compiler fingerprints do not include these new
-locks or helper files. If a source build is interrupted, resume with the same
-bundle and workspace. Changed unfinished recipes are refused. Batch 5 verifies
-the Portage command and source audit but does not run emerge or install packages;
-the native root and native compiler are introduced in batch 6. Batch 7 adds the
-native runtime libraries, Python, Perl and pinned Portage without starting an
-ebuild operation.
-
-Focused checks validate the source locks against the available pinned archives,
-Manifest snapshot mutation detection, the generated concurrency policy, bundle
-completeness, dependency order, Python/shell syntax and prior Gentoo regression
-fixtures. They do not build Python inside the bootstrap guest or establish a
-fresh end-to-end Portage guest run. The full VM replay remains part of final
-acceptance.
-
-## Batch 6 native root and compiler
-
-After the modern-kernel handoff and Portage setup, stage 60 seeds
-`native-root-x86_64/` from the verified multilib sysroot. The copy is published
-by rename and tied to the sysroot receipt; an interrupted or unreceipted root
-is left for inspection instead of being overlaid again. Stage 61 cross-builds
-Bash 5.3 and coreutils 9.11 into that root from their individually pinned
-archives. Their ELF64 outputs are run through the root's glibc loader before
-the stage receipt is written. Stage 62 then builds native binutils and GCC
-16.2.0 in the proven build order. Its probes compile and execute C and C++
-programs as ELF32 and ELF64. Stage 63 completes the native temporary-tool
-floor: m4, ncurses, diffutils, file, findutils, gawk, grep, gzip, make, patch,
-sed, tar, and xz. GNU make's lzip archive is unpacked with a separately
-source-built host lzip. Each target tool is run through the native root's
-glibc loader before its receipt is written. The sources, build trees, and
-receipts live on the workspace. Resume with the same bundle and workspace
-after an interruption. The compiler build fixes Gentoo's multilib layout at
-`/usr/lib32` and `/usr/lib64`; GCC bootstrap, OpenMP and non-C/C++ runtimes
-remain disabled at this temporary-tool stage.
-
-No ebuild or emerge operation is started by these stages. Source-built
-`scanelf` is added before the first package operation that requires it.
-The native builds have not been executed in a fresh guest; these source stages
-are validated here by static order, bundle, pin and shell checks only.
-
-## Batch 7 native runtimes and Portage
-
-After the native compiler and utility floor, stage 70 builds zlib, bzip2,
-libffi, Perl 5.42.2, OpenSSL 3.5.9 and CPython 3.12.15 inside the native root.
-The source archives are SHA512 locked; libffi's pin matches its entry in the
-pinned Gentoo Manifest. Per-source receipts include the recipe and installed
-output digest, so a completed runtime can be verified after interruption.
-Python's acceptance probe imports `_ctypes`, `bz2`, `lzma`, `ssl` and `zlib`,
-which checks the actual libffi/OpenSSL/compression runtime rather than only the
-interpreter version. Perl checks `Config`, `ExtUtils::MakeMaker`, `Digest::SHA`
-and `IPC::Cmd`.
-
-Stage 71 copies and hashes the pinned Gentoo repository and Portage source into
-the native root, installs the no-multilib seed profile and source-only Portage
-policy, then checks `emerge --version`, locale handling and Portage's bzip2
-lookup. It applies the three independent Portage concurrency settings. Until
-the following stage starts, distfiles and temporary build data stay on the
-workspace. No
-package operation runs in this batch; scanelf is added before a later ebuild
-phase requires it. VM and T440p builds use the same x86_64 runtime stages.
-Resume with the same input bundle and workspace after interruption. A fresh
-guest replay is still required to validate the native runtime build end to end.
-
-## Batch 8 Gentoo bootstrap and multilib `@system`
-
-After stage 71, the continuation runs eight ordered system phases in the same
-durable workspace: prepare the split-usr multilib profile and strict source
-policy; build a TLS-capable Wget; seed audited dependency-cycle providers;
-register the source-built glibc and Perl runtimes temporarily; build
-`scanelf` and expose verified 32-bit startup objects; run Gentoo's pinned
-bootstrap; merge and converge multilib `@system`; then verify both ABIs,
-OpenRC, runtime imports and the remaining `@system` graph. The three Portage
-settings remain independent: `portage.jobs`, `portage.load_average` and
-`portage.make_jobs`. Wget and the temporary MPFR-enabled Gawk use
-`build.source_jobs`.
-
-The temporary `package.provided` entries and bootstrap USE/cycle overrides
-are recorded and retired only after Gentoo installs their real providers.
-Portage remains source-only, uses the pinned repository's Manifests without
-changing them, disables ebuild test phases, and checks the repository before
-and after each emerge operation. Source-built `scanelf` is installed before
-the bootstrap compiler operation that needs it. Interrupted phases retain
-their logs, inputs and source/build trees on the workspace; rerun the same
-`bash gentoo.sh build` command in the same guest. Fingerprints exclude
-concurrency settings, so changing Portage concurrency does not invalidate a
-completed source recipe.
-
-The VM continuation mounts only the scratch UUID passed by the VM launcher,
-after verifying it is a distinct existing ext4 filesystem. It requires the
-launcher-recorded host free-space values plus at least 50 GiB free in the
-workspace and 24 GiB on scratch. Hardware has no synthetic scratch device;
-it uses `/build/gentoo-scratch` on the already identified workspace and
-requires 70 GiB free. Neither path formats a device. The native root binds
-scratch at `/gentoo-scratch` for Portage temporary builds and distfiles.
-
-This batch's checks cover ordered dependencies, unique source-lock entries,
-the complete generated input bundle, SHA256 manifest verification, Bash
-syntax and the existing Gentoo regression fixtures. They do not execute the
-Gentoo bootstrap or a full `@system` merge in a fresh VM; those remain part of
-the final replay acceptance.
-
-## Batch 9 encrypted-base runtime
-
-Stage 90 runs only after the first source-built multilib `@system` receipt. It
-installs the reviewed encrypted-base package set into the native root: OpenRC
-recovery and administration tools, cryptsetup with Argon2, LVM, networking,
-firmware, dracut, and the selected filesystem and device utilities. The default
-package, USE, license, keyword and firmware savedconfig files are explicit
-bundle inputs; the existing TOML package paths can replace each policy. The
-license transition narrows the bootstrap's temporary `*` allowance to
-`-* @FREE`, with a single redistributable firmware exception.
-
-Before merging, the stage validates the selected atoms with Portage, checks the
-saved modern kernel config for built-in dm-crypt, device mapper and ext4, plans
-the closure, and records a source audit. It fetches the source archives before
-merging, uses the established no-test/source-only Portage settings, checks the
-pinned repository and Manifests around each emerge, and requires `@world` to
-be converged afterward. Acceptance checks cover installed package atoms,
-cryptsetup Argon2 and LVM USE, OpenRC/networking/recovery commands and the
-dracut policy. Portage concurrency remains independently controlled by the
-three existing settings; it is left out of the recipe fingerprint.
-
-The package files and stage logs, plans, source audit and receipts remain on
-the workspace, so interruption resumes with the same `bash gentoo.sh build`
-command and bundle. The stage changes only the native build root; storage
-initialization and installation into an encrypted target remain for batch 10.
-VM execution uses the launcher-recorded scratch filesystem; hardware uses the
-existing workspace scratch directory and its larger free-space requirement.
-Static checks validate the package policy, stage order, bundle manifest and
-shell syntax. A fresh guest merge has not yet been run and remains part of the
-final VM replay.
-
-## Batch 10: encrypted installed base
-
-These commands run only after batch 9 has built the native Gentoo root and
-runtime. The installer resolves the root disk again from its recorded VM
-serial/capacity or the configured hardware by-id path, serial and capacity
-bounds. It identifies boot/workspace and extra disks separately and protects
-them. Hardware additionally checks configured root/extra WWN and model values.
-The target root must be unmounted and cannot back `/build`; workspace, boot and
-extra media remain in use.
-
-In the guest, inspect the proposal first:
+As the login user, compile, inspect and run both runtime ABIs:
 
 ```sh
-bash /build/gentoo-bootstrap/inputs/INPUT_DIGEST/gentoo.sh plan
+(
+  set -eu
+  abi_dir=$(mktemp -d)
+  trap 'rm -rf -- "$abi_dir"' EXIT
+  printf '#include <stdio.h>\nint main(void) { puts("C runtime ok"); return 0; }\n' > "$abi_dir/check.c"
+  printf '#include <string>\nint main() { std::string s("runtime"); return s.size() != 7; }\n' > "$abi_dir/check.cc"
+  for abi in 32 64; do
+    gcc -m"$abi" -O2 -march=native "$abi_dir/check.c" -o "$abi_dir/c-$abi"
+    g++ -m"$abi" -O2 -march=native "$abi_dir/check.cc" -o "$abi_dir/cxx-$abi"
+    readelf -h "$abi_dir/c-$abi" "$abi_dir/cxx-$abi"
+    "$abi_dir/c-$abi"
+    "$abi_dir/cxx-$abi"
+  done
+)
 ```
 
-The exact durable input path is printed by `gentoo.sh build` and is recorded at
-`/build/gentoo-bootstrap/current-inputs`. To initialize a new target, run the
-following interactively, verify the displayed disk identity, and type the
-exact `ERASE <serial> <major:minor>` line. It creates GPT and LUKS2, prompts
-twice for a passphrase, then creates LVM root/swap/home and filesystems:
+The build's runtime receipts test both ABIs; installed execution is a separate
+acceptance check. Reboot with `sudo reboot`, unlock again, and repeat the checks.
+Keep the results with the run record.
+
+For bootstrap recovery, boot the saved modern kernel against the original
+bootstrap root and run `/usr/local/sbin/gentoo-resume`. This restores the recorded
+workspace and network. Inspect `/build/gentoo-bootstrap/logs`, `state`,
+`current-inputs`, `current-handoff` and `install-base-state` before retrying.
+The durable driver offers `status`, `plan`, `storage-resume` and `install-root`
+as shown above. Retain `inputs`, handoff, source caches and repair-state backups;
+they are runtime evidence, even though temporary repository repair tools have
+been retired. A failed mount or identity check is a reason to inspect the
+actual device, not to manufacture a link or completion marker. If shutdown
+reports busy mounts, leave the root shell alive, inspect the holders, and retry
+the maintained shutdown helper after releasing them.
+
+On the host, `vm.py status --run-dir ...` displays the run state. Omitting
+`--apply` from lifecycle commands prints their plan. Existing images are
+validated and reused without resizing or reformatting. Never launch two guests
+against the same disks. Preserve a failed run before trying new inputs.
+
+## CPU policy and source integrity
+
+Gentoo C/C++ packages use `-O2 -pipe -march=native -mtune=native` with
+`-fstack-protector-strong -D_FORTIFY_SOURCE=2`. A checksum-pinned cpuid2cpuflags
+prerequisite is source-built before the first ebuild; detection occurs inside
+the VM or on the T440p. Detected `CPU_FLAGS_X86` apply globally through
+`package.use/00-cpu-flags`, following
+[Gentoo's CPU flags guidance](https://wiki.gentoo.org/wiki/CPU_FLAGS_%2A).
+Gentoo's own package replaces the temporary detector in the native base.
+Semantic receipts bind the detected features and resolved compiler targets;
+changed CPU capability sets or compiler targeting stop resumption. The VM is
+tied to its recorded exposed CPU capabilities. Do not substitute host detection,
+change its CPU model, or move a native-built base to an incompatible machine.
+Earlier bootstrap toolchains keep recipe-specific flags. The kernel uses a
+portable generic x86-64 target; generated performance/hardening settings and
+compiler compatibility are checked before its build.
+
+Host, chroot and installed continuation emerge callers share source-only
+validation against the pinned Portage parser/effective settings, rejecting
+binary-enabling aliases/options, binary repositories and populated package
+caches. Keep strict Manifest verification and `-assume-digests` (the minus
+**disables** that feature). Locks and snapshot hashes verify pinned bytes; they
+do not independently authenticate upstream authors or a compromised lock edit.
+The kernel additionally has a pinned-key detached-signature check. See
+[BASE-REVIEW.md](BASE-REVIEW.md) for the reconciled findings and evidence limits.
+
+## Later work and the manual desktop alternative
+
+The installed base can be preserved and developed manually as an explicit
+alternative. First make and boot-test another powered-off backup. Keep the
+native CPU flags, detected package-use settings and source-only guard in place;
+inspect dependency plans and fetch/build through `/usr/local/sbin/emerge`.
+Select the later desktop profile deliberately, review desktop USE/keywords and
+Rust's source bootstrap before installing selected packages. Record those
+choices and validate graphical login, networking, audio and reboot separately.
+Manual changes create a new lineage; do not claim automated desktop acceptance
+or resume old installation receipts over that modified root.
+
+The existing `complete-desktop`, `ms1504-extra` and `ms1504-signed-generation` tools are
+future entry points, not commands to run at the base checkpoint. Signing and
+rollback transactions, firmware handling, workspace migration and encrypted
+`/extra`, and Rust/desktop dependency convergence need their own reviews and
+acceptance gates. [SIGNED-GENERATIONS.md](SIGNED-GENERATIONS.md) describes the
+signing design; its presence does not certify physical firmware or rescue.
+
+## Maintainer checks
+
+Run the same maintained checks as CI from the repository root with Python
+3.11.4+ (including the standard tar extraction data filter):
 
 ```sh
-bash /build/gentoo-bootstrap/inputs/INPUT_DIGEST/gentoo.sh storage-init
+python3 tests/run_gentoo_checks.py --portage-archive /path/to/portage-3.0.82.2.tar.bz2
 ```
 
-After interruption, use `plan` to inspect receipts and detected disk state.
-Resume only after durable start, target, partition and LUKS receipts agree:
-
-```sh
-bash /build/gentoo-bootstrap/inputs/INPUT_DIGEST/gentoo.sh storage-resume
-```
-
-Ambiguous or partially written destructive state stops for inspection;
-resumption never repartitions or formats a completed volume. Once storage is
-complete, install or resume the encrypted root:
-
-```sh
-bash /build/gentoo-bootstrap/inputs/INPUT_DIGEST/gentoo.sh install-root
-```
-
-This prompts for the LUKS passphrase and new root/user passwords (never stored
-in configuration or logs), copies the source-built base, installs the kernel,
-modules and exact verified continuation bundle, configures accounts, password
-policy, locale, keymap, timezone, OpenRC services, sudo and LVM-backed fstab,
-then builds and checks a crypt/LVM initramfs. Root installation can be repeated
-without repartitioning or reformatting. Receipts and boot artifacts stay on the
-workspace; installed kernel/initramfs copies are bound to a durable hash
-receipt. The storage receipt binds the disk identity and configured LV layout;
-changing either after initialization stops resumption for inspection. The base
-runtime policy now includes `app-admin/passwdqc`; its changed policy fingerprint
-rebuilds stage 90 on the next `gentoo.sh build` run before installation.
-
-For VM acceptance, shut down the guest cleanly and on the host run:
-
-```sh
-sudo python3 system/gentoo/vm.py boot-installed \
-  --run-dir OUT/gentoo-run --apply
-```
-
-This boots the installed kernel/initramfs directly with recorded QEMU resources
-and the encrypted root's LUKS/LVM command line. The initramfs prompts for the
-LUKS passphrase. It does not depend on GRUB, Libreboot or signing. Hardware
-remains on its existing bootstrap boot path until the reviewed signed boot is
-initialized. No real disk initialization or guest installation was run while
-preparing this batch.
-
-## Batch 11: signed T440p generations and firmware boundary
-
-The installed hardware root now includes `/etc/ms1504-root-identity`, a
-generation marker, a dracut hibernation-generation guard, and the reviewed
-`ms1504-signed-generation` command. The manager deliberately refuses the VM
-profile. On hardware, prepare a dedicated OpenPGP key offline, copy the binary
-public key to `/etc/ms1504-boot/boot.key`, and configure the example at
-`/etc/ms1504-signed-generation.toml`. Its fingerprint must match the public
-key, and the LVM snapshot reserve must cover the configured retained count.
-See [SIGNED-GENERATIONS.md](SIGNED-GENERATIONS.md) for exact setup, update,
-rollback, pruning, and offline-merge commands.
-
-The initial signed boot requires firmware GRUB that already trusts the key and
-enforces signatures. The payload-hardening helper is generic and hash-pinned,
-but no T440p ROM is produced here: the exact working Libreboot revision,
-matching build tools, and board-specific data must be identified and audited
-on the actual machine. The optional internal flash helper is not part of
-installation or updates. Its read-only preflight, dual verified backups, exact
-confirmation, and post-write readback do not replace external recovery.
-Flashrom documents embedded-controller risks for laptops in its
-[laptop guidance](https://flashrom.org/Laptops).
-
-For updates, `begin` makes and verifies the rollback snapshot before package
-work. `status` reports snapshot COW usage; no cleanup happens automatically.
-`seal` publishes a new signed default only after both kernel artifacts and the
-menu pass verification. Explicit rollback selects a retained boot entry;
-explicit prune removes one generation after a typed confirmation. Offline
-snapshot merge requires recovery media and leaves durable receipts for
-inspection after interruption. Two previous generations are retained by
-default, subject to the configured reserve. Signed generations do not prevent
-replay of an older valid signed image because this flow has no TPM-backed
-anti-replay state.
-
-Batch 11's checks are host-only unit fixtures, shell/Python syntax checks, and
-repository regressions. They do not test real T440p firmware, a flash chip,
-encrypted boot, snapshot merge, or a token. Hardware acceptance still needs
-backup/preflight, signed boot, tamper rejection, rollback, offline recovery,
-and device/power-management checks. The complete VM replay remains an
-end-of-series requirement; this batch preserves its direct kernel/initramfs
-boot path.
-
-## Batch 12: workspace migration and encrypted `/extra`
-
-The installed root now records the extra disk's profile, serial, size, hardware
-by-id/WWN/model where applicable, and the original workspace filesystem UUID
-and label. `ms1504-extra` rechecks those values against the running encrypted
-root and `/home` LV before operating. `plan` is read-only. `migrate --source`
-copies the mounted workspace to a root-only staging directory on encrypted
-`/home`, checks available bytes with a 5% plus 512 MiB reserve, and records
-file hashes and an rsync tree comparison. The source is never modified during
-migration.
-
-Only after migration verification does `initialize --source` compare the
-source again, display the exact extra-disk identity, and require a TTY
-confirmation of `ERASE-EXTRA <serial> <major:minor>`. On hardware it unmounts
-the verified source workspace only after confirmation, then partitions the
-extra disk, creates a LUKS2 container using a generated root-only key, and
-formats ext4 with the original workspace label. An interrupted partition
-operation without a partition receipt requires manual inspection. `resume`
-accepts a readable LUKS header only if it matches the retained key; ambiguous
-partial LUKS or ext4 formatting stops for inspection instead of repeating a
-format.
-
-`restore` checks actual free space on the formatted filesystem, copies the
-staged workspace, verifies SHA-256 file contents and rsync metadata, and
-installs an OpenRC service. At boot that service unlocks the extra LUKS UUID
-with `/root/.keys/ms1504-extra.key` (mode 0400) and mounts it at `/extra`.
-Because the restored ext4 filesystem retains the `GENTOO_BUILD` label,
-`gentoo-continue build` can mount it as `/build` after the service starts.
-`verify` can run after migration cleanup using the retained manifest. Migration
-data remain on `/home` until `verify` succeeds and the operator explicitly runs
-`discard-migration`, which requires a second exact TTY confirmation. No cleanup
-is automatic.
-
-The base runtime package policy now includes `net-misc/rsync` for installed
-migration and restoration. Its policy fingerprint rebuilds native stage 90 on
-the next `gentoo.sh build` before a target install.
-
-After booting the installed Gentoo system and confirming encrypted `/home` is
-mounted, the hardware sequence is:
-
-```sh
-sudo mkdir -p /mnt/ms1504-workspace
-sudo mount -t ext4 UUID=WORKSPACE_UUID /mnt/ms1504-workspace
-sudo ms1504-extra plan
-sudo ms1504-extra migrate --source /mnt/ms1504-workspace
-sudo ms1504-extra initialize --source /mnt/ms1504-workspace
-sudo ms1504-extra restore
-sudo ms1504-extra verify
-sudo ms1504-extra discard-migration
-sudo gentoo-continue build
-```
-
-Use the UUID from `/etc/ms1504-extra-identity`. In VM acceptance, boot the
-installed image with `vm.py boot-installed`, mount the original workspace
-image at `/mnt/ms1504-workspace`, then run the same commands. VM `initialize`
-does not unmount the separate workspace image. If interrupted after durable
-partition receipts, use `ms1504-extra resume`, then `restore`; inspect rather
-than retry if a destructive operation has no matching receipt. VM and hardware
-use the same disk-identity, capacity, migration, and content checks; hardware
-also requires the configured physical by-id path, WWN, and model. These fixtures
-do not replace a fresh VM replay or actual T440p acceptance.
-
-## Batch 13: source-built desktop and installed-system acceptance
-
-After encrypted `/extra` is restored and mounted, `sudo complete-desktop` reads
-the installed bundle and recorded source-built Portage settings. It verifies
-the pinned Gentoo repository tree, selects a source Rust bootstrap chain from
-visible ebuilds, builds each Rust minor in order, then saves an emerge plan and
-fetches verified source archives to `/extra` before building Firefox, Xorg,
-Xfce, LightDM, PipeWire, WirePlumber, VLC, Bluetooth, and the selected desktop
-utilities. CD burning is disabled in the Xfce meta package policy. The script
-retains Portage distfiles, logs, and temporary build files on encrypted
-`/extra`; atomic stage receipts allow rerunning the command after interruption.
-It verifies LightDM/Xfce login, PipeWire session autostart, installed package
-atoms, and OpenRC service registration on every run. Package selection can be
-overridden with the existing `packages.desktop`, `desktop_use`,
-`desktop_keywords`, and `desktop_mask` TOML paths.
-
-On the **T440p**, wrap the package change in the signed-generation transaction.
-With signing key media connected (or the OpenPGP token available), create the
-rollback snapshot before building, then sign and publish the installed
-kernel/initramfs after the desktop command succeeds:
-
-```sh
-sudo ms1504-signed-generation --secret-key-file /media/keys/secret-key.gpg begin
-sudo complete-desktop
-sudo ms1504-signed-generation --secret-key-file /media/keys/secret-key.gpg \
-  seal --generation desktop-2026-10 --kernel /boot/vmlinuz-6.12.111 \
-  --initramfs /boot/initramfs-6.12.111.img
-sudo ms1504-signed-generation status
-```
-
-Choose a new generation name for each update. With an OpenPGP token, substitute
-`--gnupg-home /root/.gnupg`. If the desktop build fails, leave the rollback
-generation selected and inspect manager status and `/extra/portage/logs` before
-resuming. On a **VM**, run `sudo complete-desktop` directly; QEMU boots the
-installed kernel/initramfs unsigned and does not invoke the hardware manager.
-Reboot to test login, NetworkManager connectivity, Bluetooth, PipeWire audio,
-volume control, and a clean shutdown. CD burning remains off.
-
-Hardware acceptance checklist: confirm the signed generation is the default;
-log in through LightDM to Xfce; test wired networking and Wi-Fi, Bluetooth, and
-PipeWire output/input with pavucontrol; verify resume protection still rejects
-a mismatched hibernation generation; reboot cleanly and confirm the same signed
-generation starts. Run `sudo ms1504-signed-generation status` after reboot and
-retain the result with the acceptance notes. VM desktop acceptance does not
-establish T440p firmware, signing, or device acceptance.
-
-## Audited repair for the stage-50 VM checkpoint
-
-See [the audit report](AUDIT-2026-10-18.md) for findings, tests and outstanding
-VM/hardware acceptance. For the VM that completed stage 50 and stopped on
-`missing host development library: libssl.so`, copy the **entire** contents of
-[repair-vm-after-audit.paste.txt](repair-vm-after-audit.paste.txt) into its Bash
-serial shell. This is the consolidated repair; earlier per-error repairs are
-not needed at this checkpoint. Preparation does not start a build. Then run:
-
-```sh
-bash /build/gentoo-bootstrap/resume-after-audit.sh
-```
-
-The repair verifies the active snapshot, takes the process-bound driver lock,
-requires completed stages 43/50 and no started stage 51 or later, and publishes
-a new snapshot. It preserves configuration, completed GCC recipes, libraries,
-all existing stage state and the old snapshot. It does not format storage.
-A repair receipt records previous/new input IDs and file/state hashes. If the
-checkpoint differs, it refuses the update and leaves Bash running. Copying the
-whole file runs preparation in a protected child, including with `errexit` set
-in the calling shell. Do not extract individual Python or shell fragments.
-
-The resumed driver restores IPv4 using the existing source-built dhcpcd,
-prepares virtual filesystems, and establishes a controlling serial terminal
-when needed. Ctrl+C can then interrupt foreground builds. An exited build
-returns to the calling shell; never type `exit` in the PID-1 shell. The launcher
-has `-monitor none`; QMP is available at `RUN_DIRECTORY/qmp.sock`, alongside
-`serial.sock`. It has no interactive monitor escape sequence.
-
-Host Python uses the bootstrap's actual static `libssl.a`, `libcrypto.a` and
-`libz.a`, plus source-built bzip2. The preflight links and runs a TLS/hash/zlib
-probe before long builds. CPython embeds `_ssl`, `_hashlib`, `zlib` and `_bz2`;
-no fabricated shared-library links are needed. Native GCC builds its separately
-pinned GMP/MPFR/MPC prerequisites for ELF64/glibc and uses the runnable cross
-compiler for target libraries. The installer uses the native Gentoo util-linux
-inspectors and ACL/xattr-capable rsync through the saved GNU loader, keeping
-bootstrap and native libraries separate.
-
-The standalone repair is generated from the reviewed source files:
-
-```sh
-python3 system/gentoo/maintenance/make-audit-repair.py
-```
-
-Regenerate and rerun the repair tests whenever one of its 32 payload files
-changes. The generator embeds the full files so it can preserve earlier VM
-repairs without relying on an exact historical driver revision.
-
-If an already-applied audit repair stops on `unexpected /dev/stdin node`, use
-[repair-vm-fd-links.paste.txt](repair-vm-fd-links.paste.txt) and then repeat the
-resume command above. This smaller follow-up updates only the mount helper.
-Existing descriptor placeholders are preserved in `/dev/.gentoo-fd-*/original`
-before creating their standard proc-fd links. Generate this follow-up with
-`python3 system/gentoo/maintenance/make-audit-repair.py --mounts-only`.
-
-If stage 51 completed and stage 52 stopped on `source Portage version self-check
-failed` with a `Portage HEAD` banner, paste
-[repair-vm-portage-version.paste.txt](repair-vm-portage-version.paste.txt), then
-run the resume command above. Source archives legitimately report HEAD before
-installation. The corrected check verifies the pinned source's declared version
-and matching runtime banner. This repair also fixes the equivalent check in
-native stage 71, backs up only failed stage 52's fingerprint, and preserves
-completed stage 51. Generate it with
-`python3 system/gentoo/maintenance/make-audit-repair.py --portage-version`.
-
-If native Bash finishes but stage 61 stops on missing
-`sources/native-coreutils.lock`, paste
-[repair-vm-native-paths.paste.txt](repair-vm-native-paths.paste.txt), then run the
-same resume command. It fixes directory leakage and relative lock paths in
-native stages 61–63, preserves completed stages through 60 and reuses existing
-build directories. Failed-stage and recognized legacy partial tool receipts
-are backed up before the incremental retry. Generate with
-`python3 system/gentoo/maintenance/make-audit-repair.py --native-paths`.
-The earlier `/tmp/portage-integrity-*/fixture.tar.xz` failures are deliberate
-corrupt-source tests; the following strict-digest success message confirms the
-expected rejection.
-
-If stage 70 completed and stage 71 fails with `Failed to validate a sane /dev`
-and a Bash process-substitution error, paste
-[repair-vm-portage-dev.paste.txt](repair-vm-portage-dev.paste.txt), then run the
-same resume command. It mounts the native chroot's virtual filesystems for both
-action and verification, cleans them up on return, and preserves completed
-stage 70. Generate this one-file follow-up with
-`python3 system/gentoo/maintenance/make-audit-repair.py --portage-dev`.
+Use `--fetch-portage` instead to download the locked archive into a temporary
+check directory. The runner verifies its checksum, syntax-checks maintained
+shell/Python files and runs the Gentoo tests with the actual pinned Portage API.
+QEMU and ext4 tools enable disposable image/paused-CPU launcher checks. Some
+optional tests need source-built static Python/OpenSSL/zlib artifacts and Linux
+user/mount/PID namespaces; package availability checks accept an extracted pinned
+repository through `GENTOO_TEST_REPOSITORY`. Missing optional inputs report skips. CI checks do not perform the full
+VM replay or hardware preflight. Cleanup paths and coverage disposition are
+recorded in [CLEANUP.md](CLEANUP.md); images and runtime data are excluded.

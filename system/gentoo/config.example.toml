@@ -1,5 +1,5 @@
 # Copy and edit; omitted settings retain these defaults. No secrets belong here.
-# Mode comes from --mode now, and rootfs.py --qemu/--bare-metal in batch 14.
+# Mode comes from prepare.py --mode or rootfs.py --qemu/--bare-metal.
 [build]
 source_jobs = 12
 
@@ -62,8 +62,8 @@ extra_model = ""
 extra_min_bytes = 950000000000
 extra_max_bytes = 1100000000000
 
-# Optional policy inputs, relative to this TOML. Later batches add defaults.
-# Empty paths select those future defaults; custom files are copied now.
+# Optional policy inputs, relative to this TOML.
+# Empty paths select bundled defaults; custom files are copied into the bundle.
 [packages]
 base = ""
 desktop = ""
