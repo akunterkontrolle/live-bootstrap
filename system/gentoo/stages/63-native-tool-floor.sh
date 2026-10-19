@@ -102,15 +102,21 @@ native_utility_action() {
     # otherwise tries to execute a target binary during this cross build.
     gentoo_prepare_source "$SCRIPT_DIR/sources/native-gawk-5.4.1.lock"
     local gawk_source="$WORK_ROOT/sources/gawk-5.4.1" patch_receipt="$WORK_ROOT/state/63-gawk-source-patch.receipt"
+    local gawk_record gawk_hash
+    gawk_record=$(native_tool_lock_record gawk-5.4.1.tar.xz "$SCRIPT_DIR/sources/native-gawk-5.4.1.lock") ||
+        gentoo_die 'missing unique locked Gawk archive'
+    gawk_hash=${gawk_record##*sha512=}
+    [[ "$gawk_hash" =~ ^[0-9a-f]{128}$ ]] || gentoo_die 'invalid locked Gawk source hash'
     if [ ! -s "$patch_receipt" ]; then
         sed -i 's/extras//' "$gawk_source/Makefile.in"
         ! grep -q extras "$gawk_source/Makefile.in" || gentoo_die 'Gawk extras workaround did not apply'
         printf 'source sha512=%s\npatched Makefile.in sha256=%s\nrecipe=lfs13-gawk-extras-removal-v1\n' \
-            "$(awk -F '|' '{sub(/^sha512=/,"",$3);print $3}' "$SCRIPT_DIR/sources/native-gawk-5.4.1.lock")" \
+            "$gawk_hash" \
             "$(sha256sum "$gawk_source/Makefile.in" | cut -d' ' -f1)" > "$patch_receipt.tmp"
         sync "$patch_receipt.tmp"; mv "$patch_receipt.tmp" "$patch_receipt"; sync "$WORK_ROOT/state"
     else
-        grep -Fxq "patched Makefile.in sha256=$(sha256sum "$gawk_source/Makefile.in" | cut -d' ' -f1)" "$patch_receipt" ||
+        grep -Fxq "source sha512=$gawk_hash" "$patch_receipt" &&
+            grep -Fxq "patched Makefile.in sha256=$(sha256sum "$gawk_source/Makefile.in" | cut -d' ' -f1)" "$patch_receipt" ||
             gentoo_die 'Gawk patched source no longer matches its receipt'
     fi
     native_tool_build gawk-5.4.1.tar.xz sources/native-gawk-5.4.1.lock gawk-5.4.1 gawk --version gawk-cross-v1
@@ -128,7 +134,7 @@ native_utility_action() {
 }
 
 native_utility_verify() {
-    local program package marker
+    local program package marker gawk_record gawk_hash
     for package in m4-1.4.21 ncurses-6.6 diffutils-3.12 findutils-4.11.0 gawk-5.4.1 \
         grep-3.12 gzip-1.14 make-4.4.1 patch-2.8 sed-4.10 tar-1.35 xz-5.8.3; do
         marker="$WORK_ROOT/state/63-$package.done"
@@ -152,7 +158,10 @@ native_utility_verify() {
         "$WORK_ROOT/state/63-file-target.receipt" || return 1
     grep -Fxq "program sha256=$(sha256sum "$NATIVE_BUILDS/file-5.48-host/src/file" | cut -d' ' -f1)" \
         "$WORK_ROOT/state/63-file-host.receipt" || return 1
-    grep -Fxq "patched Makefile.in sha256=$(sha256sum "$WORK_ROOT/sources/gawk-5.4.1/Makefile.in" | cut -d' ' -f1)" \
+    gawk_record=$(native_tool_lock_record gawk-5.4.1.tar.xz "$SCRIPT_DIR/sources/native-gawk-5.4.1.lock") || return 1
+    gawk_hash=${gawk_record##*sha512=}
+    grep -Fxq "source sha512=$gawk_hash" "$WORK_ROOT/state/63-gawk-source-patch.receipt" &&
+        grep -Fxq "patched Makefile.in sha256=$(sha256sum "$WORK_ROOT/sources/gawk-5.4.1/Makefile.in" | cut -d' ' -f1)" \
         "$WORK_ROOT/state/63-gawk-source-patch.receipt" || return 1
 }
 fingerprint=$(gentoo_fingerprint stages/63-native-tool-floor.sh lib/toolchain.sh lib/native.sh lib/native-tools.sh \

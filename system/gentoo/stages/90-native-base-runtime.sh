@@ -94,6 +94,9 @@ base_runtime_action() (
         portage_manifest_guard_check && portage_repository_guard_check || gentoo_die 'pinned Gentoo source guard failed after emerge'
         return "$status"
     }
+    # Help2man's locale changes need a correctly configured native Perl.
+    . "$SCRIPT_DIR/lib/perl-locale.sh"
+    ensure_perl_locale
     printf '%s\n' "${atoms[@]}" > "$NATIVE_ROOT/tmp/base-runtime-atoms.txt"
     cp "$NATIVE_ROOT/tmp/base-runtime-atoms.txt" "$STATE/native-base-runtime-atoms.txt"
     chroot_env /usr/bin/python3.12 -c 'from portage.dep import Atom; import sys; [Atom(x) for x in open(sys.argv[1]).read().splitlines()]' \
@@ -113,7 +116,7 @@ base_runtime_action() (
     run_emerge --oneshot --noreplace "${atoms[@]}"
     run_emerge --pretend --newuse --deep @world | tee "$STATE/native-base-runtime-world-plan.txt"
     plan_is_empty "$STATE/native-base-runtime-world-plan.txt" || gentoo_die 'runtime package selection left @world unconverged'
-    run_emerge --pretend --verbose --color=n "$firmware_atom" | tee "$STATE/native-base-runtime-firmware-plan.txt"
+    run_emerge --pretend --verbose --color=n "=$firmware_atom" | tee "$STATE/native-base-runtime-firmware-plan.txt"
     sync "$NATIVE_ROOT/etc/portage"
     trap - EXIT
     for p in "$NATIVE_ROOT/dev" "$NATIVE_ROOT/sys" "$NATIVE_ROOT/proc" "$NATIVE_ROOT/gentoo-scratch"; do
@@ -176,6 +179,7 @@ base_runtime_verify() (
 )
 
 base_runtime_fingerprint=$(gentoo_fingerprint stages/90-native-base-runtime.sh \
+    lib/perl-locale.sh \
     lib/native-gentoo-system.sh lib/manifests.sh lib/mounts.sh \
     "$BASE_PACKAGES_INPUT" "$BASE_USE_INPUT" "$BASE_LICENSE_INPUT" "$BASE_KEYWORDS_INPUT" \
     "$FIRMWARE_INPUT" policy/90-encrypted-base-dracut.conf \

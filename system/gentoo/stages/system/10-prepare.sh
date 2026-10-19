@@ -2,8 +2,67 @@
 # Sourced by stages/80-native-gentoo-system.sh; shares its checked state.
 mkdir -p "$STATE" "$DISTFILES" "$NATIVE_ROOT/usr/src" "$NATIVE_ROOT/usr/src/archives" \
     "$NATIVE_ROOT/var/run" "$NATIVE_ROOT/var/cache/edb" "$NATIVE_ROOT/etc/portage/env" \
-    "$NATIVE_ROOT/etc/portage/package.env" "$NATIVE_ROOT/var/log/portage" \
+    "$NATIVE_ROOT/etc/portage/package.env" "$NATIVE_ROOT/etc/portage/package.accept_keywords" \
+    "$NATIVE_ROOT/var/log/portage" \
     "$SCRATCH/portage-tmp" "$SCRATCH/distfiles" "$SCRATCH/binpkgs"
+
+# Portage's sandbox setup calls `mount --make-slave /proc` before the first
+# package can provide util-linux. Supply only the mount-propagation operations
+# during this bootstrap window; the helper delegates to Gentoo mount as soon
+# as /usr/bin/mount is installed.
+bootstrap_mount_source="$SCRIPT_DIR/probes/portage-mount-shim.py"
+bootstrap_mount_shim="$NATIVE_ROOT/usr/sbin/mount"
+real_mount=
+if [ -x "$NATIVE_ROOT/usr/bin/mount" ]; then real_mount=/usr/bin/mount
+elif [ -x "$NATIVE_ROOT/bin/mount" ]; then real_mount=/bin/mount
+fi
+if [ -n "$real_mount" ]; then
+    chroot "$NATIVE_ROOT" "$real_mount" --version 2>&1 | grep -Fq util-linux || {
+        echo 'Existing native-root /usr/bin/mount is not the pinned system provider.' >&2; exit 1;
+    }
+else
+    [ -s "$bootstrap_mount_source" ] || {
+        echo 'The reviewed bootstrap mount helper is missing.' >&2; exit 1;
+    }
+    mkdir -p "$NATIVE_ROOT/usr/sbin"
+    if [ -e "$bootstrap_mount_shim" ] || [ -L "$bootstrap_mount_shim" ]; then
+        if [ -f "$bootstrap_mount_shim" ] && cmp -s "$bootstrap_mount_source" "$bootstrap_mount_shim"; then
+            : # Already running the reviewed helper.
+        else
+            # Upgrade only the exact earlier helper versions shipped with
+            # continuation snapshots; preserve the old file before publishing
+            # the proc-mount-aware fix.
+            legacy_hashes='b8f19beba192a9f25955eaf4cb39868c77610bba828d2efd6222f83a93f5f392 c56524e764935c175d88f121809cca317d3d72c01c10831cf36f585f48c9b235'
+            actual_hash=$(sha256 "$bootstrap_mount_shim")
+            case " $legacy_hashes " in *" $actual_hash "*) ;; *)
+                echo 'Refusing to replace an unexpected native-root /usr/sbin/mount.' >&2; exit 1 ;;
+            esac
+            [ -f "$bootstrap_mount_shim" ] || {
+                echo 'Refusing to replace an unexpected native-root /usr/sbin/mount.' >&2; exit 1;
+            }
+            backup="$STATE/portage-mount-shim.$actual_hash.bak"
+            if [ -e "$backup" ]; then
+                cmp -s "$bootstrap_mount_shim" "$backup" || {
+                    echo 'Existing mount-helper backup has unexpected contents.' >&2; exit 1;
+                }
+            else
+                cp -p "$bootstrap_mount_shim" "$backup"
+                sync "$backup"
+            fi
+            cp "$bootstrap_mount_source" "$bootstrap_mount_shim.tmp"
+            chmod 0755 "$bootstrap_mount_shim.tmp"
+            mv "$bootstrap_mount_shim.tmp" "$bootstrap_mount_shim"
+            sync "$(dirname "$bootstrap_mount_shim")"
+        fi
+    else
+        cp "$bootstrap_mount_source" "$bootstrap_mount_shim.tmp"
+        chmod 0755 "$bootstrap_mount_shim.tmp"
+        mv "$bootstrap_mount_shim.tmp" "$bootstrap_mount_shim"
+    fi
+    chroot "$NATIVE_ROOT" /usr/bin/python3.12 -c 'import ctypes' || {
+        echo 'The bootstrap mount helper requires the verified native Python ctypes module.' >&2; exit 1;
+    }
+fi
 
 if [ -L "$NATIVE_ROOT/var/run" ]; then
     [ "$(readlink -f "$NATIVE_ROOT/var/run")" = "$(readlink -f "$NATIVE_ROOT/run")" ] || {

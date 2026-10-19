@@ -35,7 +35,10 @@ class InstallStorageTests(unittest.TestCase):
     def test_installer_keeps_destructive_operations_behind_explicit_mode(self):
         script = (GENTOO / 'install-base.sh').read_text()
         self.assertLess(script.index('Type the exact line above'), script.index('sgdisk --zap-all'))
-        self.assertIn('[ "$MODE" = --initialize-storage ]', script)
+        self.assertIn('begin_filesystem_format "$fs" "$device"', script)
+        helper = (GENTOO / 'lib/installer-filesystems.sh').read_text()
+        self.assertIn('first-format-approved', helper)
+        self.assertIn('format was interrupted', helper)
         self.assertIn('gentoo_storage_resume_gate "$STATE"', script)
         self.assertIn('--exclude=/dev/***', script)
         self.assertIn('root-install.done', script)

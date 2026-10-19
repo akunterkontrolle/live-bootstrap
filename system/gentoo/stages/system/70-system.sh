@@ -1,5 +1,9 @@
 # Enable compiler OpenMP, refresh Perl consumers, and build the first multilib @system.
 # Sourced by stages/80-native-gentoo-system.sh; shares its checked state.
+# Stop claiming the seed glibc as a package before resolving the real system.
+# Phase 40 handles resumes; this call also covers an uninterrupted bootstrap.
+retire_bootstrap_glibc_provider
+
 # Bootstrap has installed Gentoo GCC. Restore gettext's profile USE before
 # resolving @system; --newuse below rebuilds it with OpenMP. This also handles
 # a restart after the bootstrap receipt was written but before cleanup.
@@ -76,6 +80,43 @@ system_marker="$STATE/native-gentoo-at-system-source-built.done"
 # pick up the rebuild before the remaining package merge. Keep its ebuild test
 # phase disabled under the global no-test policy.
 installed_gentoo_perl=$(chroot_env /usr/bin/portageq best_version / dev-lang/perl 2>/dev/null || true)
+# Finish the Perl transition before rebuilding any Perl consumers. Otherwise
+# @system can install modules under the seed's unversioned vendor path, then
+# replace Perl with Gentoo's versioned @INC in the same merge.
+if [ -z "$installed_gentoo_perl" ]; then
+    PHASE=install-gentoo-perl-before-consumers
+    run_emerge --oneshot dev-lang/perl
+    installed_gentoo_perl=$(chroot_env /usr/bin/portageq best_version / dev-lang/perl)
+fi
+case "$installed_gentoo_perl" in dev-lang/perl-*) ;; *)
+    echo 'Gentoo Perl must be registered before rebuilding its consumers.' >&2; exit 1 ;;
+esac
+
+# BEGIN PERL BUILD MODULE TRANSITION
+perl_build_modules_probe() {
+    chroot_env /usr/bin/python3.12 -c '
+import os
+os.setgroups([])
+os.setgid(250)
+os.setuid(250)
+os.execv("/usr/bin/perl", ["perl", "-MConfig", "-MCapture::Tiny", "-MPerlIO::utf8_strict",
+    "-MFile::Slurper", "-MConfig::AutoConf", "-e", "print qq(Perl build-module imports passed\n)"])
+'
+}
+ensure_perl_build_modules() {
+    if perl_build_modules_probe; then return; fi
+    PHASE=refresh-perl-configure-module-chain
+    # Reinstall all non-core dependencies in the pinned Config-AutoConf chain,
+    # including its XS dependency. Portage's dependency graph supplies order.
+    # Keep source verification, normal dependency resolution and tests policy.
+    run_emerge --oneshot dev-perl/Capture-Tiny dev-perl/PerlIO-utf8_strict \
+        dev-perl/File-Slurper dev-perl/Config-AutoConf
+    perl_build_modules_probe || {
+        echo 'Perl configure modules remain unavailable to the active Perl.' >&2; exit 1;
+    }
+}
+# END PERL BUILD MODULE TRANSITION
+ensure_perl_build_modules
 texinfo_marker="$STATE/native-gentoo-texinfo-perl-rebuild.done"
 if [ -n "$installed_gentoo_perl" ]; then
     case "$installed_gentoo_perl" in dev-lang/perl-*) ;; *)
@@ -340,6 +381,24 @@ if [ ! -s "$system_marker" ]; then
         }
         run_emerge --pretend --tree @system | tee "$STATE/native-gentoo-at-system-resume-plan.txt"
         run_emerge --newuse --deep @system
+    fi
+
+    # util-linux now owns the real mount executable. Remove only our exact
+    # bootstrap shim so the installed system and package database contain no
+    # unowned helper; the shim itself delegates once /usr/bin/mount exists.
+    bootstrap_mount_shim="$NATIVE_ROOT/usr/sbin/mount"
+    if [ -f "$bootstrap_mount_shim" ] &&
+        cmp -s "$SCRIPT_DIR/probes/portage-mount-shim.py" "$bootstrap_mount_shim"; then
+        real_mount=
+        if [ -x "$NATIVE_ROOT/usr/bin/mount" ]; then real_mount=/usr/bin/mount
+        elif [ -x "$NATIVE_ROOT/bin/mount" ]; then real_mount=/bin/mount
+        fi
+        [ -n "$real_mount" ] &&
+            chroot_env "$real_mount" --version 2>&1 | grep -Fq 'util-linux' || {
+            echo 'The initial @system merge did not install the expected util-linux mount provider.' >&2; exit 1;
+        }
+        rm "$bootstrap_mount_shim"
+        sync "$(dirname "$bootstrap_mount_shim")"
     fi
 
     # Keep cycle-breaking USE overrides in force while the initial @system

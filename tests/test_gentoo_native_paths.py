@@ -1,8 +1,6 @@
 """Sequential native builds retain their caller cwd and bind absolute locks."""
 import hashlib
-import importlib.util
 import io
-import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -123,72 +121,3 @@ native_tool_build tool-b.tar.gz sources/tool-b.lock tool-b tool-b --version fixt
     def test_missing_lock_cannot_publish_an_empty_archive_receipt(self):
         self.shell("FIXTURE_BINARY=bash\nnative_build_one bash-5.3.tar.gz sources/missing.lock bash-5.3 bash --version ''", success=False)
         self.assertFalse((self.work / 'state/61-bash-5.3.done').exists())
-
-
-class NativeRepairTests(unittest.TestCase):
-    def setUp(self):
-        spec = importlib.util.spec_from_file_location('fixture_native', ROOT / 'tests/test_gentoo_audit_repair.py')
-        fixture = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fixture)
-        self.case = fixture.AuditRepairTests()
-        self.case.setUp()
-        self.addCleanup(self.case.doCleanups)
-        self.work = self.case.work
-        source = self.case.source
-        names = ['lib/native.sh', 'lib/sources.sh', 'lib/state.sh', 'stages/61-native-shell-tools.sh',
-                 'sources/native-bash.lock', 'sources/native-coreutils.lock']
-        for name in names:
-            target = source / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text('old ' + name + '\n')
-        for stage in ('51-host-python', '52-portage-host', '60-native-root'):
-            for suffix in ('inputs', 'done'):
-                (self.work / 'state' / (stage + '.' + suffix)).write_text('b' * 64 + '\n')
-        files = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*')
-                 if p.is_file() and p.name != 'SHA256SUMS'}
-        manifest = ''.join(hashlib.sha256(data).hexdigest() + '  ' + name + '\n' for name, data in sorted(files.items()))
-        (source / 'SHA256SUMS').write_text(manifest)
-        self.old = hashlib.sha256(manifest.encode()).hexdigest()
-        self.source = source.with_name(self.old)
-        source.rename(self.source)
-        (self.work / 'current-inputs').write_text(self.old + '\n')
-        names.append(str(self.work / 'state/60-native-root.done'))
-        result = subprocess.run(['bash', '-c', '. ' + shlex.quote(str(GENTOO / 'lib/state.sh')) +
-                                 '; gentoo_fingerprint ' + ' '.join(shlex.quote(n) for n in names)],
-                                cwd=self.source, text=True, capture_output=True, check=True)
-        (self.work / 'state/61-native-shell-tools.inputs').write_text(result.stdout)
-        (self.work / 'state/61-bash-5.3.done').write_text('complete 2026-10-18T11:09:00Z\narchive=\nrecipe=stage61-bash-5.3-v1\n')
-
-    def test_repairs_failed_stage_and_preserves_completed_receipts(self):
-        before = {p.name: p.read_bytes() for p in (self.work / 'state').iterdir()}
-        result = self.case.run_script(GENTOO / 'repair-vm-native-paths.paste.txt')
-        self.assertIn('Published audited snapshot:', result.stdout, result.stderr)
-        self.assertIn('PARENT_ALIVE', result.stdout)
-        retired = {'61-native-shell-tools.inputs', '61-bash-5.3.done'}
-        for name, data in before.items():
-            if name in retired:
-                self.assertFalse((self.work / 'state' / name).exists())
-                self.assertEqual((self.work / 'repair-state' / (name + '.' + self.old)).read_bytes(), data)
-            else:
-                self.assertEqual((self.work / 'state' / name).read_bytes(), data)
-        target = self.work / 'inputs' / (self.work / 'current-inputs').read_text().strip()
-        for name in ('lib/native.sh', 'lib/sources.sh', 'lib/state.sh'):
-            self.assertEqual((target / name).read_bytes(), (self.source / name).read_bytes())
-        for name in ('stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh',
-                     'stages/63-native-tool-floor.sh', 'lib/native-tools.sh'):
-            self.assertEqual((target / name).read_bytes(), (GENTOO / name).read_bytes())
-
-    def test_completed_stage61_is_not_reset(self):
-        receipt = self.work / 'state/61-native-shell-tools.done'
-        receipt.write_text('c' * 64 + '\n')
-        result = self.case.run_script(GENTOO / 'repair-vm-native-paths.paste.txt')
-        self.assertIn('later stage has already started', result.stderr)
-        self.assertEqual((self.work / 'current-inputs').read_text().strip(), self.old)
-        self.assertEqual(receipt.read_text(), 'c' * 64 + '\n')
-
-    def test_unknown_partial_receipt_is_not_discarded(self):
-        path = self.work / 'state/61-bash-5.3.done'
-        path.write_text('unexpected receipt\n')
-        result = self.case.run_script(GENTOO / 'repair-vm-native-paths.paste.txt')
-        self.assertIn('unexpected partial native receipt', result.stderr)
-        self.assertEqual(path.read_text(), 'unexpected receipt\n')

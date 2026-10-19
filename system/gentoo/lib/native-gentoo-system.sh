@@ -50,7 +50,16 @@ native_gentoo_system_mounts() {
         [ "$(df -Pk /build | awk 'NR==2 {print $4}')" -ge 73400320 ] ||
             gentoo_die 'hardware workspace requires at least 70 GiB free for source builds'
     fi
-    mkdir -p "$SCRATCH/portage-tmp" "$SCRATCH/distfiles" "$SCRATCH/binpkgs"
+    # Portage drops to UID/GID 250 for fetch and build phases. Parent
+    # directories made under the former 077 mask prevented traversal even
+    # when Portage correctly owned the per-package work directory.
+    for target in "$SCRATCH/portage-tmp" "$SCRATCH/distfiles" "$SCRATCH/binpkgs"; do
+        [ ! -L "$target" ] && { [ ! -e "$target" ] || [ -d "$target" ]; } ||
+            gentoo_die "unexpected scratch cache path: $target"
+    done
+    chmod 0755 "$SCRATCH"
+    install -d -m 2775 -o 0 -g 250 \
+        "$SCRATCH/portage-tmp" "$SCRATCH/distfiles" "$SCRATCH/binpkgs"
     export SCRATCH GENTOO_SCRATCH_UUID
 }
 

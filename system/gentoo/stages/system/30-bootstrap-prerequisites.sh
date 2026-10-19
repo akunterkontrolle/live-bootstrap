@@ -69,6 +69,9 @@ if [ ! -s "$cycle_marker" ]; then
         }
         mv "$helper_source.extracting" "$helper_source"
     fi
+    # The native seed contains libc, not the Gentoo shell-library directory.
+    # Create the destination before copying the verified helper and modules.
+    install -d -m 0755 "$NATIVE_ROOT/lib/gentoo"
     helper_functions="$NATIVE_ROOT/lib/gentoo/functions.sh"
     if [ -e "$helper_functions" ]; then
         cmp -s "$helper_source/functions.sh" "$helper_functions" || {

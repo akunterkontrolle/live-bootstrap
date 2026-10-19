@@ -13,7 +13,9 @@ from lib.gentoo_config import load, render, root_image_gib
 
 # Extend this list in the batch that adds each runtime artifact.
 BUNDLE_FILES = (
-    'gentoo.sh', 'console-session.py', 'install-base.sh', 'lib/common.sh', 'lib/devices.sh', 'lib/storage.sh', 'lib/state.sh',
+    'lib/perl-locale.sh', 'lib/shutdown.sh',
+    'lib/installer-filesystems.sh', 'retire-bootstrap-nscd.py',
+    'gentoo.sh', 'console-session.py', 'bootstrap-network.py', 'install-base.sh', 'lib/common.sh', 'lib/devices.sh', 'lib/storage.sh', 'lib/state.sh',
     'signed-generation.py', 'signed-generation.example.toml', 'SIGNED-GENERATIONS.md',
     'install-signed-generation-tools.sh', 'export-boot-signing-key.sh',
     'harden-libreboot-payload.sh', 'firmware-build-receipt.sh', 'firmware-flash.sh',
@@ -45,7 +47,7 @@ BUNDLE_FILES = (
     'sources/bzip2.lock', 'sources/portage.lock',
     'stages/50-gentoo-sources.sh', 'stages/51-host-python.sh',
     'stages/52-portage-host.sh',
-    'lib/native.sh', 'lib/mounts.sh', 'lib/bootstrap-tools.sh', 'stages/60-native-root.sh',
+    'lib/native.sh', 'lib/native-resume.sh', 'lib/mounts.sh', 'lib/bootstrap-tools.sh', 'stages/60-native-root.sh',
     'stages/61-native-shell-tools.sh', 'stages/62-native-compiler.sh',
     'sources/native-bash.lock', 'sources/native-coreutils.lock',
     'sources/native-gmp.lock', 'sources/native-mpfr.lock', 'sources/native-mpc.lock',
@@ -67,6 +69,7 @@ BUNDLE_FILES = (
     'stages/system/50-elf-and-compiler.sh', 'stages/system/60-gentoo-bootstrap.sh',
     'stages/system/70-system.sh', 'stages/system/80-verify.sh',
     'build-bootstrap-scanelf.sh', 'audit-resolved-sources.py', 'probes/reinstall-plan.py',
+    'probes/portage-mount-shim.py', 'probes/native-permissions.py',
     'sources/native-xz-5.8.3.lock', 'sources/native-tar-1.35.lock',
     'sources/native-gawk-5.4.1.lock', 'sources/wget.lock',
     'sources/zlib.lock', 'sources/openssl.lock',

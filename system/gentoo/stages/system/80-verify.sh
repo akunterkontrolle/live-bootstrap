@@ -148,6 +148,12 @@ fi
 case "$installed_gentoo_glibc" in sys-libs/glibc-*) ;; *)
     echo "Gentoo's own glibc ebuild is not installed after @system: $installed_gentoo_glibc" >&2; exit 1 ;;
 esac
+# libc's private nscd interface depends on its build configuration. A seed
+# daemon copied with the GNU sysroot is not tracked by Portage and can survive
+# replacement of libc. Preserve package-owned binaries; retire only the seed.
+python3 "$SCRIPT_DIR/retire-bootstrap-nscd.py" --root "$NATIVE_ROOT" \
+    --sysroot "$WORK_ROOT/sysroot-x86_64" --backup "$WORK_ROOT/repair-state/nscd-native" --apply
+
 retire_bootstrap_perl_provider
 installed_gentoo_perl=$(chroot_env /usr/bin/portageq best_version / dev-lang/perl 2>/dev/null || true)
 if [ -z "$installed_gentoo_perl" ]; then

@@ -19,6 +19,12 @@ case "${1:-build}" in
 esac
 [ "$#" -le 1 ] || gentoo_die 'unexpected arguments'
 [ "$(id -u)" = 0 ] || gentoo_die 'run in the bootstrap guest as root'
+# Early util-linux reads fstab even for explicit mount operations. Preserve
+# existing policy; the bootstrap root itself has no fstab entries to install.
+if [ ! -e /etc/fstab ] && [ ! -L /etc/fstab ]; then
+    printf '# Bootstrap mounts are managed explicitly by the continuation.\n' > /etc/fstab
+    chmod 0644 /etc/fstab
+fi
 [ ! -d /run/gentoo-shutdown-in-progress ] || gentoo_die 'shutdown is in progress'
 gentoo_verify_bundle "$SCRIPT_DIR"
 . "$SCRIPT_DIR/lib/mounts.sh"
@@ -89,6 +95,9 @@ if [ "$command" != build ]; then
     bash "$SCRIPT_DIR/install-base.sh" "$installer_mode"
     exit 0
 fi
+# Runtime directories and installed public files must be readable by Portage
+# after it drops privileges. Workspace inputs and logs above stay private.
+umask 022
 . "$SCRIPT_DIR/lib/toolchain.sh"
 . "$SCRIPT_DIR/stages/10-host-preflight.sh"
 . "$SCRIPT_DIR/stages/11-binutils-elf.sh"
@@ -117,13 +126,21 @@ if [ "$GENTOO_MODERN_KERNEL_READY" = 1 ]; then
     . "$SCRIPT_DIR/stages/51-host-python.sh"
     . "$SCRIPT_DIR/stages/52-portage-host.sh"
     . "$SCRIPT_DIR/lib/native.sh"
-    . "$SCRIPT_DIR/stages/60-native-root.sh"
-    . "$SCRIPT_DIR/stages/61-native-shell-tools.sh"
-    . "$SCRIPT_DIR/stages/62-native-compiler.sh"
-    . "$SCRIPT_DIR/lib/native-tools.sh"
-    . "$SCRIPT_DIR/stages/63-native-tool-floor.sh"
-    . "$SCRIPT_DIR/stages/70-native-runtimes.sh"
-    . "$SCRIPT_DIR/stages/71-native-portage.sh"
+    . "$SCRIPT_DIR/lib/native-resume.sh"
+    if gentoo_native_resume_handoff; then
+        : # Stage 80 now owns verification of the changing native root.
+    else
+        . "$SCRIPT_DIR/stages/60-native-root.sh"
+        . "$SCRIPT_DIR/stages/61-native-shell-tools.sh"
+        . "$SCRIPT_DIR/stages/62-native-compiler.sh"
+        . "$SCRIPT_DIR/lib/native-tools.sh"
+        . "$SCRIPT_DIR/stages/63-native-tool-floor.sh"
+        . "$SCRIPT_DIR/stages/70-native-runtimes.sh"
+        . "$SCRIPT_DIR/stages/71-native-portage.sh"
+    fi
+    # This account directory stays private despite the public build umask.
+    chmod 0700 "$NATIVE_ROOT/root"
+    python3 "$SCRIPT_DIR/probes/native-permissions.py" --root "$NATIVE_ROOT"
     . "$SCRIPT_DIR/stages/80-native-gentoo-system.sh"
     . "$SCRIPT_DIR/stages/90-native-base-runtime.sh"
 fi

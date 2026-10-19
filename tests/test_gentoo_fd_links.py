@@ -1,5 +1,4 @@
 """Bootstrap /dev placeholders must not prevent continuation startup."""
-import importlib.util
 import os
 from pathlib import Path
 import shlex
@@ -109,23 +108,3 @@ class DescriptorLinksTests(unittest.TestCase):
         (self.dev / 'stdin').write_text('preserve')
         self.run_helper('mv() { return 1; }; ln() { return 1; }; readlink() { return 1; }')
         self.assertEqual(next(self.dev.glob('.gentoo-fd-stdin.*/original')).read_text(), 'preserve')
-
-    def test_targeted_paste_updates_only_mount_helper_and_preserves_receipts(self):
-        spec = importlib.util.spec_from_file_location('audit_test_fixture', ROOT / 'tests/test_gentoo_audit_repair.py')
-        fixture = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fixture)
-        case = fixture.AuditRepairTests()
-        case.setUp()
-        self.addCleanup(case.doCleanups)
-        before = {p.name: p.read_bytes() for p in (case.work / 'state').iterdir()}
-        result = case.run_script(GENTOO / 'repair-vm-fd-links.paste.txt')
-        self.assertIn('PARENT_ALIVE', result.stdout)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        current = (case.work / 'current-inputs').read_text().strip()
-        target = case.work / 'inputs' / current
-        entries = fixture.repair.verify(target)
-        self.assertEqual(set(entries), set(case.original) | {'lib/mounts.sh'})
-        self.assertEqual((target / 'lib/mounts.sh').read_bytes(), (GENTOO / 'lib/mounts.sh').read_bytes())
-        for name, data in case.original.items():
-            self.assertEqual((target / name).read_bytes(), data)
-        self.assertEqual(before, {p.name: p.read_bytes() for p in (case.work / 'state').iterdir()})

@@ -1,4 +1,4 @@
-"""The saved cold-boot handoff obtains DHCP before entering the driver."""
+"""The saved cold-boot handoff restores networking before entering the driver."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
 from pathlib import Path
@@ -33,37 +33,48 @@ class RebootNetworkTests(unittest.TestCase):
             'uname': 'case "$1" in -r) printf "6.12.111\\n";; -m) printf "x86_64\\n";; *) exit 2;; esac\n',
             'mountpoint': 'printf "mountpoint %s\\n" "$*" >> "$NETWORK_EVENTS"\n',
             'mkdir': 'printf "mkdir %s\\n" "$*" >> "$NETWORK_EVENTS"\n',
-            'dhcpcd': 'printf "dhcpcd %s\\n" "$*" >> "$NETWORK_EVENTS"\nexit "${DHCP_RESULT:-0}"\n',
+            # Descriptor-link setup also uses Python before networking.
+            'python3': '[ "$1" != - ] || exit 0\nprintf "helper %s\\n" "$*" >> "$NETWORK_EVENTS"\nexit "${DHCP_RESULT:-0}"\n',
             'bash': 'printf "driver %s\\n" "$*" >> "$NETWORK_EVENTS"\n',
         }
         for name, body in commands.items():
             command = fake / name
             command.write_text('#!/bin/sh\n' + body)
             command.chmod(0o755)
-        self.env = dict(os.environ, PATH=str(fake) + ':' + os.defpath, NETWORK_EVENTS=str(self.events))
+        self.env = dict(os.environ, PATH=str(fake) + ':' + os.defpath,
+                        NETWORK_EVENTS=str(self.events), GENTOO_CONSOLE_SESSION='1')
 
     def run_resume(self, result=0):
         env = dict(self.env, DHCP_RESULT=str(result))
         return subprocess.run(['/bin/bash', str(self.resume)], env=env, text=True, capture_output=True)
 
-    def test_waits_for_ipv4_and_then_runs_exact_snapshot(self):
+    def test_restores_network_then_runs_exact_snapshot(self):
         result = self.run_resume()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = self.events.read_text().splitlines()
-        network = events.index('dhcpcd --waitip=4 --timeout 60')
+        network = next(i for i, line in enumerate(events) if line.startswith('helper '))
         driver = next(i for i, line in enumerate(events) if line.startswith('driver '))
         self.assertLess(network, driver)
         self.assertTrue(events[driver].endswith('/inputs/' + 'a' * 64 + '/gentoo.sh build'))
-        self.assertTrue(any('mkdir -p /var/run/dhcpcd /var/db/dhcpcd' == line for line in events))
+        self.assertTrue(events[network].endswith('/inputs/' + 'a' * 64 + '/bootstrap-network.py'))
 
     def test_dhcp_failure_stops_download_driver_and_can_be_retried(self):
         result = self.run_resume(result=1)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('DHCP did not obtain an IPv4 lease', result.stderr)
+        self.assertIn('network setup failed', result.stderr)
         self.assertNotIn('driver ', self.events.read_text())
         result = self.run_resume()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('driver ', self.events.read_text())
+
+    def test_enters_console_session_before_network_or_build(self):
+        self.env['GENTOO_CONSOLE_SESSION'] = '0'
+        result = self.run_resume()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        events = self.events.read_text()
+        self.assertIn('/console-session.py bash ' + str(self.resume), events)
+        self.assertNotIn('/bootstrap-network.py', events)
+        self.assertNotIn('driver ', events)
 
 
 if __name__ == '__main__':

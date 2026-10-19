@@ -4,9 +4,9 @@
 # Perl/libxcrypt graphs contain cycles while the Gentoo package database is
 # empty. Portage's package.provided supports source-built host prerequisites.
 # We expose only the exact glibc 2.44 and Perl 5.42.2 already built from locked
-# source in this root. These bootstrap providers remain until normal @system
-# has installed Gentoo's own glibc, Perl and libxcrypt ebuilds; then they are
-# removed and verified. The installed system never inherits these claims.
+# source in this root. Drop the glibc claim after bootstrap so normal @system
+# can install its genuine Gentoo package; keep the working seed libraries.
+# Retire the Perl claim after @system. The installed system inherits no claims.
 bootstrap_marker="$STATE/native-gentoo-bootstrap.done"
 provider_file="$NATIVE_ROOT/etc/portage/profile/package.provided"
 provider_marker="$STATE/native-gentoo-bootstrap-providers.done"
@@ -37,15 +37,42 @@ native_runtime=$(native_gentoo_glibc_runtime_version) &&
     case "$native_runtime" in 2.44*) printf 'Native glibc runtime=%s\n' "$native_runtime";; *) false;; esac || {
     echo 'Native-root glibc does not match the source-locked 2.44 provider.' >&2; exit 1;
 }
-[ -s "$NATIVE_ROOT/usr/lib/perl5/5.42.2/x86_64-linux/CORE/libperl.so" ] &&
-    chroot_env /usr/bin/perl -e 'printf "%vd\n", $^V' | grep -Fxq '5.42.2' || {
-    echo 'The source-built native Perl 5.42.2 runtime did not execute with its verified shared library.' >&2; exit 1;
-}
+# Gentoo may have replaced the seed during an interrupted @system merge.
+# Keep checking historical source receipts above, but validate the current
+# package-owned executable rather than demanding the retired seed runtime.
+provider_gentoo_perl=$(chroot_env /usr/bin/portageq best_version / dev-lang/perl 2>/dev/null || true)
+if [ -n "$provider_gentoo_perl" ]; then
+    [[ "$provider_gentoo_perl" =~ ^dev-lang/perl-([0-9]+[.][0-9]+[.][0-9]+)(-r[0-9]+)?$ ]] || {
+        echo 'Unexpected installed Gentoo Perl identity.' >&2; exit 1;
+    }
+    provider_perl_version=${BASH_REMATCH[1]}
+    provider_perl_vdb="$NATIVE_ROOT/var/db/pkg/$provider_gentoo_perl"
+    [ "$(cat "$provider_perl_vdb/repository" 2>/dev/null)" = gentoo ] || {
+        echo 'Installed Perl is not owned by the pinned Gentoo repository.' >&2; exit 1;
+    }
+    provider_perl_md5=$(awk '$1=="obj" && $2=="/usr/bin/perl" {count++; hash=$3}
+        END {if(count!=1) exit 1; print hash}' "$provider_perl_vdb/CONTENTS") || {
+        echo 'Gentoo Perl lacks a unique executable ownership record.' >&2; exit 1;
+    }
+    [ "$(md5sum "$NATIVE_ROOT/usr/bin/perl" | awk '{print $1}')" = "$provider_perl_md5" ] &&
+        chroot_env /usr/bin/perl -MConfig -e 'printf "%vd\n", $^V' |
+            grep -Fxq "$provider_perl_version" || {
+        echo 'Installed Perl does not match its Gentoo package/runtime.' >&2; exit 1;
+    }
+else
+    [ -s "$NATIVE_ROOT/usr/lib/perl5/5.42.2/x86_64-linux/CORE/libperl.so" ] &&
+        chroot_env /usr/bin/perl -e 'printf "%vd\n", $^V' | grep -Fxq '5.42.2' || {
+        echo 'The source-built native Perl 5.42.2 runtime did not execute with its verified shared library.' >&2; exit 1;
+    }
+fi
 retire_bootstrap_glibc_provider() {
     [ -s "$provider_marker" ] || return 0
-    [ "$(chroot_env /usr/bin/portageq best_version / sys-libs/glibc)" = \
-        "sys-libs/glibc-$BOOTSTRAP_GLIBC_VERSION" ] && verify_native_gentoo_glibc || {
-        echo 'Refusing to retire the source-built glibc provider before Gentoo glibc is installed and verified.' >&2
+    # Remove the temporary package.provided claim, not the working libraries.
+    # Keeping the claim until Gentoo glibc is installed hides that package from
+    # @system. The locked seed runtime is checked above; phase 70 verifies the
+    # genuine Gentoo glibc after its merge, before accepting the system.
+    [ -s "$bootstrap_marker" ] || {
+        echo 'Refusing to retire the glibc provider before bootstrap completion.' >&2
         return 1
     }
     expected_provider_hash=$(awk -F= '$1 == "provider file sha256" {n++; value=$2} END {if(n!=1) exit 1; print value}' \

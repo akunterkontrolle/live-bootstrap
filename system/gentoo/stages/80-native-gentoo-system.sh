@@ -21,11 +21,29 @@ native_gentoo_system_action() (
     BASE_SOURCES_LOCK="$SCRIPT_DIR/sources/glibc.lock"
     SYSTEM_LOCK="$SCRIPT_DIR/sources/wget.lock"
     PORTAGE_SOURCE="$PORTAGE_SOURCE"
+    # Hash stable relative names and file contents. sha256sum FILE includes
+    # the absolute path in its output, which made markers fail after the same
+    # verified bundle was copied to a new content-addressed snapshot path.
     driver_hash=$( {
-        sha256sum "$SCRIPT_DIR/lib/native-gentoo-system.sh" "$SCRIPT_DIR/build-bootstrap-scanelf.sh" \
-            "$SCRIPT_DIR/audit-resolved-sources.py" "$SCRIPT_DIR/probes/reinstall-plan.py" "$SCRIPT_DIR/stages/system/"*.sh
+        for file in "$SCRIPT_DIR/lib/native-gentoo-system.sh" "$SCRIPT_DIR/build-bootstrap-scanelf.sh" \
+            "$SCRIPT_DIR/audit-resolved-sources.py" "$SCRIPT_DIR/probes/reinstall-plan.py" \
+            "$SCRIPT_DIR/probes/portage-mount-shim.py" "$SCRIPT_DIR/stages/system/"*.sh; do
+            printf '%s\n' "${file#"$SCRIPT_DIR"/}"
+            sha256sum < "$file"
+        done
     } | sha256sum | cut -d' ' -f1 )
-    marker_driver_recorded() { grep -Fxq "driver sha256=$driver_hash" "$1" || grep -Fxq "script sha256=$driver_hash" "$1"; }
+    marker_driver_recorded() {
+        local recorded compatibility="$STATE/native-gentoo-compatible-drivers-$driver_hash.receipt"
+        recorded=$(awk -F= '/^(driver|script) sha256=/ {value=$2; count++}
+            END {if(count!=1 || length(value)!=64 || value~/[^0-9a-f]/) exit 1; print value}' "$1") || return 1
+        [ "$recorded" = "$driver_hash" ] && return 0
+        # A reviewed repair proves recipe/source equivalence against verified
+        # archived inputs. Keep completed receipts intact: other receipts hash
+        # their contents, so rewriting driver fields would break those links.
+        [ -f "$compatibility" ] && [ ! -L "$compatibility" ] &&
+            grep -Fxq "target driver sha256=$driver_hash" "$compatibility" &&
+            grep -Fxq "compatible driver sha256=$recorded" "$compatibility"
+    }
     native_gentoo_system_mounts
 
     fetch_wget() {
@@ -107,6 +125,7 @@ native_gentoo_system_action() (
 
 native_gentoo_system_verify() {
     local state_dir="$WORK_ROOT/state"
+    local NATIVE_ROOT="$WORK_ROOT/native-root-x86_64"
     local receipt="$WORK_ROOT/state/native-gentoo-system-ready.receipt"
     [ -s "$receipt" ] && grep -Fxq "Gentoo repository commit=$GENTOO_REPO_COMMIT" "$receipt" &&
         [ -s "$state_dir/native-gentoo-at-system-source-built.done" ] &&
@@ -118,8 +137,15 @@ native_gentoo_system_verify() {
         grep -Fxq 'ABI_X86="64 32"' "$NATIVE_ROOT/etc/portage/make.conf" &&
         grep -Fxq 'FEATURES="-test -getbinpkg -buildpkg -assume-digests -digest strict"' \
             "$NATIVE_ROOT/etc/portage/make.conf" &&
-        [ -x "$NATIVE_ROOT/usr/bin/gcc" ] && [ -x "$NATIVE_ROOT/usr/bin/g++" ] &&
-        [ -x "$NATIVE_ROOT/usr/bin/emerge" ] && [ -x "$NATIVE_ROOT/sbin/openrc" ]
+        chroot "$NATIVE_ROOT" /bin/bash --noprofile --norc -c '
+            # Gentoo gcc-config uses absolute links within this root.
+            for program in /usr/bin/gcc /usr/bin/g++ /usr/bin/emerge /sbin/openrc; do
+                [ -x "$program" ] || {
+                    printf "Missing native executable: %s\n" "$program" >&2
+                    exit 1
+                }
+            done
+        '
 }
 
 native_system_fingerprint=$(gentoo_fingerprint \
@@ -127,8 +153,9 @@ native_system_fingerprint=$(gentoo_fingerprint \
     stages/system/10-prepare.sh stages/system/20-runtime-and-downloader.sh \
     stages/system/30-bootstrap-prerequisites.sh stages/system/40-runtime-providers.sh \
     stages/system/50-elf-and-compiler.sh stages/system/60-gentoo-bootstrap.sh \
-    stages/system/70-system.sh stages/system/80-verify.sh \
+    stages/system/70-system.sh stages/system/80-verify.sh retire-bootstrap-nscd.py \
     build-bootstrap-scanelf.sh audit-resolved-sources.py probes/reinstall-plan.py \
+    probes/portage-mount-shim.py \
     sources/native-xz-5.8.3.lock sources/native-tar-1.35.lock sources/native-gawk-5.4.1.lock \
     sources/wget.lock sources/glibc.lock sources/perl.lock config.inputs.sh \
     "$WORK_ROOT/state/71-native-portage.done" "$WORK_ROOT/state/70-native-runtimes.done" \

@@ -10,6 +10,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
 . "$SCRIPT_DIR/lib/storage.sh"
 . "$SCRIPT_DIR/lib/mounts.sh"
 . "$SCRIPT_DIR/lib/bootstrap-tools.sh"
+. "$SCRIPT_DIR/lib/installer-filesystems.sh"
 MODE=--plan; [ "$#" -eq 0 ] || MODE=$1
 case "$MODE" in --plan|--initialize-storage|--resume-storage|--install-root) ;; *) gentoo_die 'usage: install-base.sh [--plan|--initialize-storage|--resume-storage|--install-root]' ;; esac
 [ "$#" -le 1 ] || gentoo_die 'pass one installer mode'
@@ -136,7 +137,6 @@ verify_target() {
         [ "$GENTOO_MODE" != hardware ] || grep -Fxq "wwn=$ROOT_WWN_OBSERVED" "$STATE/target.identity" || fail 'root WWN changed.'
     fi
 }
-clean_ext4() { [ "$(blkid -p -s TYPE -o value "$1" 2>/dev/null || true)" = ext4 ] && dumpe2fs -h "$1" 2>/dev/null | grep -Eq '^Filesystem state:[[:space:]]+clean$'; }
 resume_storage() {
     local luks_uuid pv vg lv free needed home_extents device fs current home_bytes
     gentoo_storage_resume_gate "$STATE" || fail 'storage state ambiguous; inspect manually.'
@@ -179,7 +179,7 @@ resume_storage() {
                     home_extents=$((free - RESERVE_GIB * 256)); lvm_run lvcreate --yes --extents "$home_extents" --name home "$VG" ;;
             esac
             lvm_run vgmknodes "$VG"
-            phase "lv-$lv.done" "LV=$VG/$lv"
+            phase "lv-$lv.done" "LV=$VG/$lv" 'filesystem preparation=not started'
         fi
         [ -b "$device" ] || fail "$lv is missing."
     done
@@ -191,25 +191,32 @@ resume_storage() {
     for fs in root home swap; do
         device="/dev/$VG/$fs"
         if [ ! -s "$STATE/fs-$fs.done" ]; then
+            probe_filesystem_type "$device"
             case "$fs" in
                 root|home)
                     if clean_ext4 "$device"; then :
-                    elif [ -z "$(blkid -p -s TYPE -o value "$device" 2>/dev/null || true)" ] && [ "$MODE" = --initialize-storage ]; then
+                    elif [ -z "$current" ]; then
+                        begin_filesystem_format "$fs" "$device"
                         native_run mkfs.ext4 -F -m 0 -L "GENTOO-$fs" "$device"; clean_ext4 "$device" || fail "$fs format failed."
                     else fail "$fs format incomplete/unreceipted; inspect manually."; fi ;;
                 swap)
-                    current=$(blkid -p -s TYPE -o value "$device" 2>/dev/null || true)
-                    if [ "$current" != swap ]; then [ -z "$current" ] && [ "$MODE" = --initialize-storage ] || fail 'swap state requires inspection.'; native_run mkswap -L GENTOO-swap "$device"; fi ;;
+                    if [ "$current" != swap ]; then
+                        [ -z "$current" ] || fail 'swap state requires inspection.'
+                        begin_filesystem_format "$fs" "$device"
+                        native_run mkswap -L GENTOO-swap "$device"
+                    fi ;;
             esac
-            phase "fs-$fs.done" "LV=$VG/$fs" "type=$(blkid -s TYPE -o value "$device")"
+            probe_filesystem_type "$device"
+            case "$fs:$current" in root:ext4|home:ext4|swap:swap) ;; *) fail "$fs filesystem output verification failed." ;; esac
+            phase "fs-$fs.done" "LV=$VG/$fs" "type=$current"
         fi
     done
     [ "$(lvm_run lvs --noheadings -o lv_name "$VG" | awk '{$1=$1; if(NF) print}' | sort)" = "home
 root
 swap" ] || fail 'unexpected target LVs.'
     clean_ext4 "/dev/$VG/root" && clean_ext4 "/dev/$VG/home" || fail 'root/home ext4 verification failed.'
-    [ "$(blkid -s TYPE -o value "/dev/$VG/swap")" = swap ] || fail 'swap verification failed.'
-    phase storage.done "LUKS UUID=$luks_uuid" "root UUID=$(blkid -s UUID -o value "/dev/$VG/root")" "home UUID=$(blkid -s UUID -o value "/dev/$VG/home")" "swap UUID=$(blkid -s UUID -o value "/dev/$VG/swap")" "VG=$VG" "root GiB=$ROOT_GIB" "swap GiB=$SWAP_GIB" "reserve GiB=$RESERVE_GIB" "home minimum GiB=$HOME_MIN_GIB"
+    [ "$(blkid -p -s TYPE -o value "/dev/$VG/swap")" = swap ] || fail 'swap verification failed.'
+    phase storage.done "LUKS UUID=$luks_uuid" "root UUID=$(blkid -p -s UUID -o value "/dev/$VG/root")" "home UUID=$(blkid -p -s UUID -o value "/dev/$VG/home")" "swap UUID=$(blkid -p -s UUID -o value "/dev/$VG/swap")" "VG=$VG" "root GiB=$ROOT_GIB" "swap GiB=$SWAP_GIB" "reserve GiB=$RESERVE_GIB" "home minimum GiB=$HOME_MIN_GIB"
 }
 
 
@@ -337,10 +344,14 @@ install_root() {
     if mountpoint -q "$TARGET_ROOT/home"; then
         [ "$(readlink -f "$(findmnt -rn -M "$TARGET_ROOT/home" -o SOURCE)")" = "$(readlink -f "$home_lv")" ] || fail 'wrong home mount.'
     else mount "$home_lv" "$TARGET_ROOT/home"; fi
-    root_uuid=$(blkid -s UUID -o value "$root_lv"); home_uuid=$(blkid -s UUID -o value "$home_lv"); swap_uuid=$(blkid -s UUID -o value "$swap_lv")
+    root_uuid=$(blkid -p -s UUID -o value "$root_lv"); home_uuid=$(blkid -p -s UUID -o value "$home_lv"); swap_uuid=$(blkid -p -s UUID -o value "$swap_lv")
     luks_uuid=$(native_run cryptsetup luksUUID "$ROOT_PART")
     grep -Fxq "root UUID=$root_uuid" "$STATE/storage.done" && grep -Fxq "home UUID=$home_uuid" "$STATE/storage.done" &&
         grep -Fxq "swap UUID=$swap_uuid" "$STATE/storage.done" && grep -Fxq "LUKS UUID=$luks_uuid" "$STATE/storage.done" || fail 'storage receipt mismatch.'
+    # Gentoo may build libc without nscd; retire only the exact unowned seed
+    # daemon before copying the root or running account-management tools.
+    python3 "$SCRIPT_DIR/retire-bootstrap-nscd.py" --root "$NATIVE_ROOT" \
+        --sysroot "$WORK_ROOT/sysroot-x86_64" --backup "$WORK_ROOT/repair-state/nscd-native" --apply
     if [ ! -s "$STATE/root-filesystem.done" ]; then
         rsync -aHAX --numeric-ids \
             --exclude=/dev/*** --exclude=/proc/*** --exclude=/sys/*** --exclude=/run/*** --exclude=/tmp/*** \
@@ -349,6 +360,8 @@ install_root() {
             "$NATIVE_ROOT/" "$TARGET_ROOT/"
         phase root-filesystem.done 'source=verified native Gentoo root' "root UUID=$root_uuid"
     fi
+    python3 "$SCRIPT_DIR/retire-bootstrap-nscd.py" --root "$TARGET_ROOT" \
+        --sysroot "$WORK_ROOT/sysroot-x86_64" --backup "$WORK_ROOT/repair-state/nscd-installed" --apply
     install -d -m 1777 "$TARGET_ROOT/tmp" "$TARGET_ROOT/var/tmp"
     copy_continuation_bundle
     (cd "$WORK_ROOT/artifacts/kernel-$RELEASE" && sha256sum -c SHA256SUMS)
@@ -435,6 +448,7 @@ install_root() {
     printf 'Encrypted base installed. VM: python3 system/gentoo/vm.py boot-installed --run-dir RUN_DIRECTORY --apply\n'
 }
 gentoo_use_native_storage_tools
+gentoo_use_native_filesystem_tools
 for utility in awk blkid blockdev cat chroot cmp cp date dumpe2fs find findmnt grep install lsblk mkdir mount mountpoint mv readlink rsync sed sha256sum sort sync umount wipefs; do
     command -v "$utility" >/dev/null 2>&1 || fail "missing command: $utility"
 done

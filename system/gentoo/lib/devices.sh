@@ -10,6 +10,12 @@ gentoo_disk_serial() {
         if [ -s "$path/serial" ]; then cat "$path/serial"; return; fi
         path=${path%/*}
     done
+    # Post-Gentoo installation runs from the musl host without a udev DB.
+    # The native helper can read an IDE disk's ATA identity directly.
+    if declare -F gentoo_native_ata_serial >/dev/null &&
+        serial=$(gentoo_native_ata_serial "$disk"); then
+        [ -n "$serial" ] && { printf '%s\n' "$serial"; return; }
+    fi
     for tool in /usr/lib/udev/ata_id /lib/udev/ata_id; do
         [ -x "$tool" ] || continue
         serial=$("$tool" --export "$disk" | sed -n 's/^ID_SERIAL_SHORT=//p')

@@ -8,10 +8,12 @@ if [ "$(readlink -f "$0")" != /run/gentoo-clean-shutdown.sh ]; then
     here=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
     input_digest=$(basename "$here")
     work_root=$(CDPATH= cd -- "$here/../.." && pwd)
+    export GENTOO_SHUTDOWN_HELPER="$work_root/inputs/$input_digest/lib/shutdown.sh"
     export GENTOO_LOCK_COMMON="$work_root/inputs/$input_digest/lib/common.sh"
 fi
 : "${GENTOO_LOCK_COMMON:?cannot locate the durable lock helper}"
 . "$GENTOO_LOCK_COMMON"
+. "${GENTOO_SHUTDOWN_HELPER:?cannot locate the durable shutdown helper}"
 # Bash keeps its script open; relocate off /build before trying to unmount it.
 if [ "$(readlink -f "$0")" != /run/gentoo-clean-shutdown.sh ]; then
     mkdir -p /run
@@ -29,6 +31,7 @@ trap 'rmdir /run/gentoo-shutdown-in-progress 2>/dev/null || true' EXIT
 WORK_ROOT=/build/gentoo-bootstrap
 export WORK_ROOT
 gentoo_lock
+gentoo_stop_bootstrap_dhcpcd
 sync
 exec 9>&-
 while IFS= read -r point; do umount "$point"; done < <(
