@@ -423,6 +423,7 @@ install_root() {
         --sysroot "$WORK_ROOT/sysroot-x86_64" --backup "$WORK_ROOT/repair-state/nscd-installed" --apply
     install -d -m 1777 "$TARGET_ROOT/tmp" "$TARGET_ROOT/var/tmp"
     copy_continuation_bundle
+    python3 "$SCRIPT_DIR/configure-installed-portage.py" --root "$TARGET_ROOT"
     (cd "$WORK_ROOT/artifacts/kernel-$RELEASE" && sha256sum -c SHA256SUMS)
     module_release=$(cat "$WORK_ROOT/artifacts/kernel-$RELEASE/kernelrelease")
     [ "$module_release" = "$RELEASE" ] || fail 'kernel release mismatch.'
@@ -471,6 +472,8 @@ install_root() {
         grep -Eq '^[[:space:]]*[^#[:space:]].*ttyS0' "$TARGET_ROOT/etc/inittab" || printf 's0:12345:respawn:/sbin/agetty -L 115200 ttyS0 vt100\n' >> "$TARGET_ROOT/etc/inittab"
     fi
     install_accounts
+    # pambase 20251104-r1 starts OpenRC users but has no XDG runtime provider.
+    python3 "$SCRIPT_DIR/configure-user-runtime.py" --root "$TARGET_ROOT"
     target_mounts
     trap 'target_unmounts; native_unmounts' EXIT
     resume_guard="$TARGET_ROOT/usr/lib/dracut/modules.d/05ms1504-resume-guard"

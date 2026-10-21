@@ -151,6 +151,11 @@ base_runtime_verify() (
         [ -x "$root/usr/bin/$command" ] || [ -x "$root/usr/sbin/$command" ] ||
             [ -x "$root/bin/$command" ] || [ -x "$root/sbin/$command" ] || return 1
     done
+    [ -s "$root/lib64/security/pam_xdg.so" ] || [ -s "$root/usr/lib64/security/pam_xdg.so" ] ||
+        [ -s "$root/lib/security/pam_xdg.so" ] || [ -s "$root/usr/lib/security/pam_xdg.so" ] || return 1
+    # OpenRC/tmpfiles ownership rules require the packaged serial-device group.
+    chroot "$root" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        getent group uucp >/dev/null || return 1
     [ -d "$root/etc/init.d" ] && [ -x "$root/sbin/openrc" ] || return 1
     [ -x "$root/etc/init.d/NetworkManager" ] || [ -L "$root/etc/init.d/NetworkManager" ] || return 1
     grep -qw argon2 "$root"/var/db/pkg/sys-fs/cryptsetup-*/USE || return 1

@@ -10,7 +10,7 @@ case "$MODE" in --plan|plan) MODE=plan ;; --migrate|migrate) MODE=migrate ;;
     --initialize|initialize) MODE=initialize ;; --resume|resume) MODE=resume ;;
     --restore|restore) MODE=restore ;; --verify|verify) MODE=verify ;;
     --discard-migration|discard-migration) MODE=discard-migration ;;
-    *) echo 'Usage: ms1504-extra {plan|migrate --source MOUNT|initialize --source MOUNT|resume|restore|verify|discard-migration}' >&2; exit 2 ;; esac
+    *) echo 'Usage: ms1504-extra {plan|migrate [--source MOUNT]|initialize --source MOUNT|resume|restore|verify|discard-migration}' >&2; exit 2 ;; esac
 
 . "$(dirname -- "$(readlink -f "$0")")/lib/devices.sh"
 gentoo_die() { fail "$@"; }
@@ -83,7 +83,9 @@ fi
 
 disk_serial() {
     local disk=${1} value
-    value=$(lsblk -dnro SERIAL "$disk" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    # Use the same sysfs/VPD fallback as bootstrap discovery when udev has
+    # not populated SERIAL (notably QEMU USB storage after installed boot).
+    value=$(gentoo_disk_serial "$disk") || fail "cannot read disk serial: $disk"
     [[ -n $value ]] || fail "cannot read disk serial: $disk"
     printf '%s\n' "$value"
 }
@@ -106,7 +108,8 @@ resolve_devices() {
     [[ -b $ROOT_DEVICE && -b $HOME_DEVICE ]] || fail 'installed root/home LVs are unavailable.'
     mountpoint -q /home || fail '/home is not mounted; migration must be on encrypted home.'
     [[ $(readlink -f "$(findmnt -rn -M /home -o SOURCE)") == "$HOME_DEVICE" ]] || fail '/home is not the installed home LV.'
-    root_devs=$(lvs --noheadings --options devices "$ROOT_DEVICE" | tr -d '[:space:]')
+    # lvs expects an LV name; /dev/dm-N may be parsed as a VG name.
+    root_devs=$(lvs --noheadings --options devices "$VG/$ROOT_LV" | tr -d '[:space:]')
     [[ -n $root_devs ]] || fail 'cannot identify the physical root backing device.'
     root_disks=$(lsblk -s -lnpo NAME,TYPE "$ROOT_DEVICE" | awk '$2 == "disk" {print $1}')
     [[ $(printf '%s\n' "$root_disks" | wc -l) -eq 1 ]] || fail 'root LV does not resolve to exactly one physical disk.'
@@ -168,6 +171,41 @@ check_workspace_source() {
     nested=$(findmnt -rn -o TARGET | awk -v prefix="$source/" 'index($0,prefix)==1 {print}')
     [[ -z $nested ]] || fail "workspace has nested mounts that are not included: $nested"
     SOURCE_MOUNT=$source; SOURCE_DEVICE=$(readlink -f "$device")
+}
+
+mount_recorded_hardware_workspace() {
+    local candidates device parent mounts target options entries
+    [[ $PROFILE == hardware ]] || fail 'VM migration requires --source MOUNT.'
+    [[ ! -e $STATE/initialize.started && ! -e $STATE/restore.done ]] || fail 'extra initialization has started; inspect existing migration state.'
+    candidates=$(blkid -c /dev/null -t "UUID=$WORKSPACE_UUID" -o device) || fail 'recorded workspace UUID is unavailable.'
+    [[ -n $candidates && $(printf '%s\n' "$candidates" | wc -l) -eq 1 ]] || fail 'recorded workspace UUID is ambiguous.'
+    device=$(readlink -f "$candidates")
+    [[ -b $device ]] || fail 'recorded workspace is not a block device.'
+    [[ $(blkid -s TYPE -o value "$device") == ext4 && $(blkid -s LABEL -o value "$device") == "$WORKSPACE_LABEL" ]] || fail 'recorded workspace type or label differs.'
+    parent=$(lsblk -dnro PKNAME "$device" | tr -d '[:space:]')
+    [[ -n $parent && $(readlink -f "/dev/$parent") == "$EXTRA_REAL" ]] || fail 'recorded workspace is not on the identified extra disk.'
+    target=/mnt/gentoo-workspace
+    [[ -d /mnt && ! -L /mnt && ! -L $target ]] || fail 'workspace mount path is unsafe.'
+    # findmnt returns 1 for no match; other errors must not authorize a mount.
+    if mounts=$(findmnt -rn -S "$device" -o TARGET); then
+        [[ $mounts == "$target" ]] || fail 'workspace is already mounted elsewhere; unmount it before automatic migration.'
+    else
+        [[ $? -eq 1 ]] || fail 'cannot inspect existing workspace mounts.'
+        [[ ! -e $target || -d $target ]] || fail 'workspace mount path is not a directory.'
+        mountpoint -q "$target" && fail 'workspace mountpoint is occupied.'
+        if [[ -d $target ]]; then
+            entries=$(find "$target" -mindepth 1 -maxdepth 1 -print -quit) || fail 'cannot inspect workspace mountpoint.'
+            [[ -z $entries ]] || fail 'workspace mountpoint is not empty.'
+            [[ $(stat -c '%u:%g:%a' "$target") == 0:0:755 ]] || fail 'workspace mountpoint must be root-owned mode 0755.'
+        fi
+        install -d -m 0755 "$target"
+        # noload prevents ext4 journal replay from writing through a read-only mount.
+        mount -t ext4 -o ro,noload "$device" "$target"
+    fi
+    options=$(findmnt -rn -M "$target" -o OPTIONS)
+    [[ ,$options, == *,ro,* ]] || fail 'workspace source must be mounted read-only.'
+    check_workspace_source "$target"
+    printf 'Recorded workspace mounted read-only at %s; retained for final initialization comparison.\n' "$target"
 }
 
 copy_and_verify_migration() {
@@ -304,8 +342,12 @@ case "$MODE" in
             "$MIGRATION" "$home_free" "$MOUNT" "$KEY"
         ;;
     migrate)
-        [[ $# -eq 2 && $1 == --source ]] || fail 'migrate requires --source MOUNT.'
-        check_workspace_source "$2"
+        if [[ $# -eq 0 ]]; then
+            mount_recorded_hardware_workspace
+        else
+            [[ $# -eq 2 && $1 == --source ]] || fail 'usage: migrate [--source MOUNT].'
+            check_workspace_source "$2"
+        fi
         copy_and_verify_migration
         echo 'Workspace copy and file manifest verified; source disk is unchanged.'
         ;;

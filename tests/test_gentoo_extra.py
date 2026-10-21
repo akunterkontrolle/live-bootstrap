@@ -64,3 +64,67 @@ class ExtraMigrationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ExtraRootResolutionTests(unittest.TestCase):
+    def test_lvs_receives_lv_name_even_when_device_resolves_to_dm_node(self):
+        source = (GENTOO / 'setup-extra.sh').read_text()
+        function = 'resolve_devices() {' + source.split('resolve_devices() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+        # Fixture paths represent devices; all discovery/LVM commands remain real shell calls to stubs.
+        function = function.replace('[[ -b ', '[[ -n ').replace(' && -b ', ' && -n ')
+        fixture = r'''set -Eeuo pipefail
+VG=gentoo; ROOT_LV=root; HOME_LV=home; ROOT_PROFILE=vm; PROFILE=vm
+ROOT_SERIAL=ROOT; ROOT_BYTES=1000; EXTRA_SERIAL=EXTRA; EXTRA_BYTES=2000
+fail() { echo "$*" >&2; exit 19; }
+[() { if builtin [ "$1" = -b ]; then return 0; fi; builtin [ "$@"; }
+readlink() {
+    case "${!#}" in /dev/gentoo/root) echo /dev/dm-1;; /dev/gentoo/home) echo /dev/dm-2;; *) echo "${!#}";; esac
+}
+mountpoint() { return 0; }
+findmnt() { echo /dev/dm-2; }
+lvs() { [ "${!#}" = gentoo/root ] || { echo 'dm node parsed as VG' >&2; return 79; }; echo '/dev/mapper/gentoo-crypt(0)'; }
+lsblk() {
+    case "$*" in
+      *NAME,TYPE*) echo '/dev/sdc disk';;
+      *TYPE*) echo disk;;
+      *SIZE*' /dev/sdc') echo 1000;;
+      *SIZE*) echo 2000;;
+      *MAJ:MIN*) echo 8:16;;
+      *) return 99;;
+    esac
+}
+disk_serial() { case "$1" in /dev/sdc) echo ROOT;; /dev/sdb) echo EXTRA;; esac; }
+find_by_serial() { echo /dev/sdb; }
+'''
+        fixed = subprocess.run(['bash', '-c', fixture + function + 'resolve_devices\n'],
+                               capture_output=True, text=True)
+        self.assertEqual(fixed.returncode, 0, fixed.stderr)
+        broken = function.replace('"$VG/$ROOT_LV"', '"$ROOT_DEVICE"')
+        result = subprocess.run(['bash', '-c', fixture + broken + 'resolve_devices\n'],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('dm node parsed as VG', result.stderr)
+
+
+class ExtraSerialDiscoveryTests(unittest.TestCase):
+    def test_extra_reader_uses_shared_vpd_fallback_and_refuses_missing_serial(self):
+        import shlex
+        source = (GENTOO / 'setup-extra.sh').read_text()
+        function = 'disk_serial() {' + source.split('disk_serial() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = b'GUEST-ROOT '
+            (root / 'vpd_pg80').write_bytes(b'\0\x80' + len(payload).to_bytes(2, 'big') + payload)
+            fixture = ('. ' + shlex.quote(str(GENTOO / 'lib/devices.sh')) + '\n'
+                       'lsblk() { return 0; }\n'
+                       'readlink() { echo ' + shlex.quote(str(root)) + '; }\n'
+                       'fail() { echo "$*" >&2; exit 19; }\n')
+            run = lambda: subprocess.run(['bash', '-c', fixture + function + 'disk_serial /dev/sdc\n'],
+                                         text=True, capture_output=True)
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, 'GUEST-ROOT\n')
+            (root / 'vpd_pg80').unlink()
+            result = run()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('cannot read disk serial', result.stderr)

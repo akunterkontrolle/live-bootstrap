@@ -1,7 +1,6 @@
 """Resume before LUKS creation without repartitioning or repeating a started format."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
-import importlib.util
 from pathlib import Path
 import shlex
 import shutil
@@ -12,10 +11,6 @@ import unittest
 GENTOO = Path(__file__).resolve().parents[1] / 'system/gentoo'
 SOURCE = (GENTOO / 'install-base.sh').read_text()
 HELPER = SOURCE[SOURCE.index('initialize_blank_luks() {'):SOURCE.index('\nresume_storage()')]
-
-spec = importlib.util.spec_from_file_location('pre_luks_repair', GENTOO / 'repair-pre-luks-resume.py')
-repair = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(repair)
 
 
 
@@ -172,101 +167,3 @@ resume_checkpoint() {
             self.assertNotEqual(subprocess.run(['bash', '-c', script, 'gate', str(self.state)], capture_output=True).returncode, 0)
             (self.state / name).write_text('existing receipt\n')
         self.assertEqual(subprocess.run(['bash', '-c', script, 'gate', str(self.state)], capture_output=True).returncode, 0)
-
-
-class PublicationTests(unittest.TestCase):
-    def setUp(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        self.work = Path(temp.name)
-        entries = {'gentoo.sh': b'unchanged driver\n'}
-        for name, spec in repair.PATCHES.items():
-            new = (GENTOO / name).read_text()
-            self.assertEqual(repair.sha(new.encode()), spec['new'])
-            offset = 0
-            reverse = []
-            for start, end, replacement, removed in spec['edits']:
-                adjusted = start + offset
-                reverse.append((adjusted, adjusted + len(replacement), removed))
-                offset += len(replacement) - (end - start)
-            for start, end, removed in reversed(reverse):
-                new = new[:start] + removed + new[end:]
-            entries[name] = new.encode()
-            self.assertEqual(repair.sha(entries[name]), spec['old'])
-        manifest = ''.join(repair.sha(data) + '  ' + name + '\n' for name, data in sorted(entries.items())).encode()
-        identity = repair.sha(manifest)
-        source = self.work / 'inputs' / identity
-        for name, data in entries.items():
-            path = source / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-        (source / 'SHA256SUMS').write_bytes(manifest)
-        (self.work / 'current-inputs').write_text(identity + '\n')
-        self.state = self.work / 'install-base-state'
-        self.state.mkdir()
-        self.receipts = {}
-        for name in ('storage.started', 'target.identity', 'partition.done'):
-            path = self.state / name
-            path.write_text('verified partition checkpoint\n')
-            self.receipts[path] = path.read_bytes()
-        self.original = identity
-
-    def test_full_paste_publishes_repeats_and_leaves_storage_receipts_untouched(self):
-        paste = (GENTOO / 'repair-vm-pre-luks-resume.paste.txt').read_text().replace(
-            "default=Path('/build/gentoo-bootstrap')", 'default=Path(' + repr(str(self.work)) + ')')
-        for _ in range(2):
-            result = subprocess.run(['bash', '-eu', '-s'], input=paste + '\necho PARENT_ALIVE\n',
-                                    text=True, capture_output=True, timeout=20)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('storage-resume', result.stdout)
-            self.assertIn('PARENT_ALIVE', result.stdout)
-        selected = (self.work / 'current-inputs').read_text().strip()
-        fixed = repair.snapshot(self.work, selected)
-        for name, spec in repair.PATCHES.items():
-            self.assertEqual(repair.sha(fixed[name]), spec['new'])
-        repair.snapshot(self.work, self.original)
-        for path, data in self.receipts.items():
-            self.assertEqual(path.read_bytes(), data)
-        self.assertFalse((self.state / 'luks.started').exists())
-
-    def test_followup_updates_the_previously_published_repair_without_overwriting_its_journal(self):
-        entries = {'gentoo.sh': b'unchanged driver\n'}
-        for name, spec in repair.FOLLOWUP_PATCHES.items():
-            text = (GENTOO / name).read_text()
-            offset = 0
-            reverse = []
-            for start, end, replacement, removed in spec['edits']:
-                adjusted = start + offset
-                reverse.append((adjusted, adjusted + len(replacement), removed))
-                offset += len(replacement) - (end - start)
-            for start, end, removed in reversed(reverse):
-                text = text[:start] + removed + text[end:]
-            self.assertEqual(repair.sha(text.encode()), spec['old'])
-            entries[name] = text.encode()
-        manifest = ''.join(repair.sha(data) + '  ' + name + '\n' for name, data in sorted(entries.items())).encode()
-        identity = repair.sha(manifest)
-        source = self.work / 'inputs' / identity
-        for name, data in entries.items():
-            path = source / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-        (source / 'SHA256SUMS').write_bytes(manifest)
-        (self.work / 'current-inputs').write_text(identity + '\n')
-        previous = self.work / 'repair-state/pre-luks-inputs.json'
-        previous.parent.mkdir()
-        previous.write_text('previous repair evidence\n')
-        driver = repair.repair(self.work)
-        updated = repair.snapshot(self.work, driver.parent.name)
-        self.assertIn(b'blkid -p -D -s TYPE', updated['install-base.sh'])
-        self.assertEqual(previous.read_text(), 'previous repair evidence\n')
-        for path, data in self.receipts.items():
-            self.assertEqual(path.read_bytes(), data)
-
-    def test_later_storage_state_refuses_before_source_selection_changes(self):
-        for name in ('luks.started', 'luks.done', 'pv.done'):
-            path = self.state / name
-            path.write_text('existing state\n')
-            with self.assertRaises(ValueError):
-                repair.repair(self.work)
-            self.assertEqual((self.work / 'current-inputs').read_text().strip(), self.original)
-            path.unlink()

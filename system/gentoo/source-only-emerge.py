@@ -79,6 +79,14 @@ def check_settings(settings, binrepo_loader, portage):
     check_cache(str(Path(settings.get('EROOT', '/')) / 'var/cache/binpkgs'))
 
 
+def emerge_command(emerge):
+    # A python-exec dispatcher is an ELF executable, not a Python script.
+    # Direct host/source callers still need the caller's selected interpreter.
+    with open(emerge, 'rb') as stream:
+        binary = stream.read(4) == b'\x7fELF'
+    return [emerge] if binary else [sys.executable, emerge]
+
+
 def run(emerge, arguments):
     import portage
     from _emerge.main import parse_opts
@@ -92,7 +100,7 @@ def run(emerge, arguments):
 
     check()
     try:
-        result = subprocess.run([sys.executable, emerge, '--usepkg=n', '--getbinpkg=n',
+        result = subprocess.run([*emerge_command(emerge), '--usepkg=n', '--getbinpkg=n',
                                  '--buildpkg=n', *arguments]).returncode
     finally:
         check()

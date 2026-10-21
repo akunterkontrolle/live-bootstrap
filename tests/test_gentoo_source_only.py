@@ -138,6 +138,7 @@ class PinnedPortagePolicyTests(unittest.TestCase):
             (cache / 'unexpected.gpkg.tar').write_bytes(b'binary output')
             return subprocess.CompletedProcess(args[0], 7)
         with patch.object(self.portage, 'config', return_value=settings), \
+                patch.object(guard, 'emerge_command', return_value=[sys.executable, '/fixture/emerge']), \
                 patch.object(guard.subprocess, 'run', side_effect=merge):
             with self.assertRaisesRegex(ValueError, 'contains data'):
                 guard.run('/fixture/emerge', ['--pretend', '@system'])
@@ -145,15 +146,18 @@ class PinnedPortagePolicyTests(unittest.TestCase):
     def test_exit_status_preserved_and_unsafe_defaults_cannot_run_emerge(self):
         settings = self.settings()
         with patch.object(self.portage, 'config', return_value=settings), \
+                patch.object(guard, 'emerge_command', return_value=[sys.executable, '/fixture/emerge']), \
                 patch.object(guard.subprocess, 'run', return_value=subprocess.CompletedProcess([], 7)) as merge:
             self.assertEqual(guard.run('/fixture/emerge', ['--pretend', '@system']), 7)
             self.assertEqual(merge.call_args.args[0][2:5], ['--usepkg=n', '--getbinpkg=n', '--buildpkg=n'])
         with patch.object(self.portage, 'config', return_value=settings), \
+                patch.object(guard, 'emerge_command', return_value=[sys.executable, '/fixture/emerge']), \
                 patch.object(guard.subprocess, 'run', return_value=subprocess.CompletedProcess([], -2)):
             self.assertEqual(guard.run('/fixture/emerge', ['--pretend', '@system']), 130)
         self.makeconf.write_text(self.makeconf.read_text() + 'EMERGE_DEFAULT_OPTS="-G"\n')
         settings = self.settings()
-        with patch.object(self.portage, 'config', return_value=settings), patch.object(guard.subprocess, 'run') as merge:
+        with patch.object(self.portage, 'config', return_value=settings), patch.object(guard, 'emerge_command', return_value=[sys.executable, '/fixture/emerge']), \
+                patch.object(guard.subprocess, 'run') as merge:
             with self.assertRaises(ValueError):
                 guard.run('/fixture/emerge', ['--pretend', '@system'])
             merge.assert_not_called()
