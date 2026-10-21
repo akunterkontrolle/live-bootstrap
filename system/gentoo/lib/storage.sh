@@ -27,3 +27,13 @@ gentoo_storage_resume_gate() {
         return 1
     }
 }
+
+# A partition checkpoint exists before any LUKS formatting is attempted.
+gentoo_storage_partition_gate() {
+    local state=$1
+    [ -s "$state/storage.started" ] && [ -s "$state/target.identity" ] &&
+        [ -s "$state/partition.done" ] || {
+        printf 'Storage recovery requires durable start, target, and partition receipts.\n' >&2
+        return 1
+    }
+}

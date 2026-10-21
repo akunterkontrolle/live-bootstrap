@@ -9,7 +9,10 @@ cpu_policy_action() {
     gentoo_prepare_source sources/cpuid2cpuflags.lock
     local source="$WORK_ROOT/sources/cpuid2cpuflags-18"
     install -d -m 0755 "$(dirname "$CPU_PREREQUISITE")"
-    "$PREFIX/bin/$TARGET-gcc" --sysroot="$SYSROOT" -O2 -pipe -static \
+    # The bootstrap cross driver does not infer the split usr/lib64 layout.
+    # Bind startup objects and static libc just as the earlier link probes do.
+    "$PREFIX/bin/$TARGET-gcc" -m64 --sysroot="$SYSROOT" \
+        -B"$SYSROOT/usr/lib64/" -L"$SYSROOT/usr/lib64" -O2 -pipe -static \
         -DHAVE_STDINT_H '-DPACKAGE_STRING="cpuid2cpuflags 18"' \
         "$source/src/main.c" "$source/src/x86.c" "$source/src/x86-lib.c" \
         -o "$CPU_PREREQUISITE.tmp"

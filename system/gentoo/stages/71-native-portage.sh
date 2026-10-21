@@ -129,6 +129,11 @@ native_portage_action() {
     cp -a "$PORTAGE_SOURCE/." "$portage_dir/"
     [ "$(native_portage_tree_hash "$repository")" = "$repo_hash" ] || gentoo_die 'native Gentoo repository copy differs from pinned source'
     [ "$(native_portage_tree_hash "$portage_dir")" = "$portage_hash" ] || gentoo_die 'native Portage copy differs from pinned source'
+    # Extraction's private temporary root is copied by cp -a too. Publish
+    # these two runtime roots, then bind their final modes in the tree receipt.
+    chmod 0755 "$repository" "$portage_dir"
+    repo_hash=$(native_portage_tree_hash "$repository")
+    portage_hash=$(native_portage_tree_hash "$portage_dir")
     mkdir -p "$NATIVE_ROOT/usr/bin"
     ln -sfn ../lib/portage/bin/emerge "$NATIVE_ROOT/usr/bin/emerge"
     ln -sfn ../lib/portage/bin/portageq "$NATIVE_ROOT/usr/bin/portageq"

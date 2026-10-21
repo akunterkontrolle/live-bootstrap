@@ -153,11 +153,53 @@ verify_target() {
         [ "$GENTOO_MODE" != hardware ] || grep -Fxq "wwn=$ROOT_WWN_OBSERVED" "$STATE/target.identity" || fail 'root WWN changed.'
     fi
 }
+initialize_blank_luks() {
+    local signatures pass pass_again confirmation marker status=0
+    # A format-start receipt means a cryptsetup attempt may have written data.
+    # Even a currently blank signature probe cannot prove that safe to repeat.
+    for marker in luks.started luks.done pv.done vg.done storage.done \
+        lv-root.done lv-home.done lv-swap.done \
+        fs-root.started fs-home.started fs-swap.started fs-root.done fs-home.done fs-swap.done; do
+        [ ! -e "$STATE/$marker" ] && [ ! -L "$STATE/$marker" ] ||
+            fail "LUKS initialization is ambiguous ($marker); inspect before proceeding."
+    done
+    [ ! -e /dev/mapper/gentoo-crypt ] || fail 'root mapper already exists.'
+    signatures=$(wipefs --no-act --noheadings --output TYPE "$ROOT_PART") ||
+        fail 'cannot inspect partition signatures.'
+    [ -z "$signatures" ] || fail 'partition has existing signatures; refusing LUKS initialization.'
+    # GPT partition-entry details alone make blkid return success without TYPE.
+    # Exclude that metadata while retaining all superblock/signature detection.
+    signatures=$(blkid -p -D -s TYPE -o value "$ROOT_PART") || status=$?
+    [ "$status" = 2 ] && [ -z "$signatures" ] ||
+        fail 'partition is not verified blank; refusing LUKS initialization.'
+    if [ "$MODE" = --resume-storage ]; then
+        printf 'CREATE LUKS %s %s\n' "$ROOT_SERIAL" "$ROOT_MAJMIN" > /dev/tty
+        read_tty_line 'Type the exact line above to encrypt the recorded blank partition: ' confirmation
+        [ "$confirmation" = "CREATE LUKS $ROOT_SERIAL $ROOT_MAJMIN" ] || fail 'confirmation mismatch.'
+    fi
+    while :; do
+        printf 'New LUKS passphrase twice; it will not be saved or logged.\n' >&2
+        read_secret 'New passphrase: ' pass
+        read_secret 'Repeat passphrase: ' pass_again
+        if [ -n "$pass" ] && [ "$pass" = "$pass_again" ]; then break; fi
+        unset pass pass_again
+        printf 'Empty or mismatched passphrases; try again or press Ctrl+C to cancel.\n' >&2
+    done
+    phase luks.started "partition=$ROOT_PART" "target identity sha256=$(sha256 "$STATE/target.identity")"
+    printf '%s' "$pass" | native_run cryptsetup luksFormat --batch-mode --type luks2 --pbkdf argon2id --label GENTOO-ROOT --key-file=- "$ROOT_PART"
+    unset pass pass_again
+    native_run cryptsetup isLuks "$ROOT_PART" || fail 'LUKS format failed.'
+    phase luks.done "LUKS UUID=$(native_run cryptsetup luksUUID "$ROOT_PART")"
+}
 resume_storage() {
     local luks_uuid pv vg lv free needed home_extents device fs current home_bytes
-    gentoo_storage_resume_gate "$STATE" || fail 'storage state ambiguous; inspect manually.'
+    gentoo_storage_partition_gate "$STATE" || fail 'storage state ambiguous; inspect manually.'
     verify_target; grep -Fxq "partition=$ROOT_PART" "$STATE/partition.done" || fail 'partition receipt differs.'
     [ -b "$ROOT_PART" ] && [ "$(lsblk -dnro PARTTYPE "$ROOT_PART" | tr '[:lower:]' '[:upper:]')" = CA7D7CCB-63ED-4C53-861C-1742536059CC ] || fail 'GPT LUKS partition mismatch.'
+    if [ ! -e "$STATE/luks.done" ] && [ ! -L "$STATE/luks.done" ]; then
+        initialize_blank_luks
+    fi
+    gentoo_storage_resume_gate "$STATE" || fail 'LUKS state ambiguous; inspect manually.'
     native_run cryptsetup isLuks "$ROOT_PART" || fail 'root partition is not LUKS.'
     luks_uuid=$(native_run cryptsetup luksUUID "$ROOT_PART"); grep -Fxq "LUKS UUID=$luks_uuid" "$STATE/luks.done" || fail 'LUKS receipt mismatch.'
     if ! native_run cryptsetup status gentoo-crypt >/dev/null 2>&1; then
@@ -502,13 +544,7 @@ case "$MODE" in
         sync; native_run blockdev --rereadpt "$ROOT_REAL"; native_run udevadm settle --timeout=30
         [ -b "$ROOT_PART" ] && [ "$(lsblk -dnro PARTTYPE "$ROOT_PART" | tr '[:lower:]' '[:upper:]')" = CA7D7CCB-63ED-4C53-861C-1742536059CC ] || fail 'GPT partition verification failed.'
         phase partition.done "partition=$ROOT_PART" 'type=CA7D7CCB-63ED-4C53-861C-1742536059CC'
-        printf 'New LUKS passphrase twice; it will not be saved or logged.\n' >&2
-        read_secret 'New passphrase: ' pass
-        read_secret 'Repeat passphrase: ' pass_again
-        [ -n "$pass" ] && [ "$pass" = "$pass_again" ] || fail 'empty or mismatched passphrases.'
-        printf '%s' "$pass" | native_run cryptsetup luksFormat --batch-mode --type luks2 --pbkdf argon2id --label GENTOO-ROOT --key-file=- "$ROOT_PART"
-        unset pass pass_again; native_run cryptsetup isLuks "$ROOT_PART" || fail 'LUKS format failed.'
-        phase luks.done "LUKS UUID=$(native_run cryptsetup luksUUID "$ROOT_PART")"
+        initialize_blank_luks
         resume_storage; native_unmounts; trap - EXIT
         ;;
     --resume-storage)

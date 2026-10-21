@@ -135,8 +135,12 @@ unit tests do not perform them.
    bash "$driver" storage-resume
    ```
 
-   Completed volumes are preserved. Ambiguous format-start state stops for
-   inspection. Do not edit receipts to force progress.
+   Completed volumes are preserved. If you cancelled at the new-passphrase
+   prompt after partitioning, `storage-resume` verifies the recorded partition
+   is blank and asks for a `CREATE LUKS …` confirmation before creating LUKS.
+   Mismatched new passphrases retry before any format intent is recorded.
+   A format-start receipt without completion stops for inspection. Do not edit
+   receipts to force progress.
 
 6. **Guest root:** install or resume copying/configuring the base:
 
