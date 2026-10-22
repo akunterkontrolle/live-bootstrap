@@ -6,3 +6,6 @@ xfce-base/xfce4-meta -cdr
 # PipeWire provides PulseAudio compatibility for the Xfce desktop.
 media-video/pipewire sound-server pulseaudio bluetooth dbus elogind pipewire-alsa -system-service -systemd
 media-video/wireplumber elogind -system-service -systemd
+# Xfce panel dbusmenu support and Firefox system-libvpx dependencies.
+dev-libs/libdbusmenu gtk3
+media-libs/libvpx postproc
