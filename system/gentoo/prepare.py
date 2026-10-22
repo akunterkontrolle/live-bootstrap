@@ -26,7 +26,7 @@ BUNDLE_FILES = (
     'harden-libreboot-payload.sh', 'firmware-build-receipt.sh', 'firmware-flash.sh',
     'dracut-ms1504-resume-guard/module-setup.sh',
     'dracut-ms1504-resume-guard/check-generation.sh',
-    'setup-extra.sh', 'complete-desktop.sh', 'desktop-packages.list',
+    'setup-extra.sh', 'workspace-retention.py', 'complete-desktop.sh', 'desktop-packages.list',
     'desktop-package.use', 'desktop-package.accept_keywords',
     'desktop-package.mask', 'desktop-rust-bootstrap.py', 'desktop-lightdm.conf',
     'lib/sources.sh', 'stages/00-inputs.sh',

@@ -43,6 +43,8 @@ findmnt() {
 mountpoint() { return 1; }
 mount() { echo "mount $*"; }
 check_workspace_source() { echo "check $1"; }
+check_installed_continuation() { :; }
+select_migration_policy() { :; }
 copy_and_verify_migration() { echo copy-and-verify; }
 '''
             command = fixture + function + branch

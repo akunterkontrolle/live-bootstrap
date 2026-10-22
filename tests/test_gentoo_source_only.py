@@ -91,6 +91,18 @@ class PinnedPortagePolicyTests(unittest.TestCase):
         return self.portage.config(config_root=str(self.config), target_root=str(self.root / 'target'),
                                    env={'PATH': os.defpath})
 
+    def test_desktop_policy_enables_required_dependency_flags_in_effective_portage_settings(self):
+        policy = self.config / 'etc/portage/package.use'
+        policy.mkdir()
+        (policy / '80-desktop').write_text((GENTOO / 'desktop-package.use').read_text())
+        for cpv, flag in (('dev-libs/libdbusmenu-16.04.0-r4', 'gtk3'),
+                          ('media-libs/libvpx-1.16.0', 'postproc')):
+            with self.subTest(cpv=cpv):
+                settings = self.settings()
+                settings.setcpv(cpv, mydb={'EAPI': '8', 'IUSE': flag,
+                                         'SLOT': '0', 'KEYWORDS': 'amd64', 'repository': 'gentoo'})
+                self.assertIn(flag, settings['PORTAGE_USE'].split())
+
     def test_all_binary_aliases_combined_options_and_supported_abbreviations_refuse(self):
         for arguments in (['-k'], ['-K'], ['-g'], ['-G'], ['-b'], ['-B'], ['-pvK'],
                           ['--usepkg=y'], ['--usepkgonly'], ['--getbinpkg=y'],

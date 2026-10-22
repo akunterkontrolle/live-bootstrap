@@ -1,5 +1,6 @@
 """Reviewable checks for the encrypted workspace migration helper."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -82,7 +83,7 @@ readlink() {
 }
 mountpoint() { return 0; }
 findmnt() { echo /dev/dm-2; }
-lvs() { [ "${!#}" = gentoo/root ] || { echo 'dm node parsed as VG' >&2; return 79; }; echo '/dev/mapper/gentoo-crypt(0)'; }
+lvs() { [[ ! -e /proc/self/fd/9 ]] || { echo "inherited lock fd" >&2; return 78; }; [ "${!#}" = gentoo/root ] || { echo 'dm node parsed as VG' >&2; return 79; }; echo '/dev/mapper/gentoo-crypt(0)'; }
 lsblk() {
     case "$*" in
       *NAME,TYPE*) echo '/dev/sdc disk';;
@@ -96,14 +97,28 @@ lsblk() {
 disk_serial() { case "$1" in /dev/sdc) echo ROOT;; /dev/sdb) echo EXTRA;; esac; }
 find_by_serial() { echo /dev/sdb; }
 '''
-        fixed = subprocess.run(['bash', '-c', fixture + function + 'resolve_devices\n'],
-                               capture_output=True, text=True)
-        self.assertEqual(fixed.returncode, 0, fixed.stderr)
-        broken = function.replace('"$VG/$ROOT_LV"', '"$ROOT_DEVICE"')
-        result = subprocess.run(['bash', '-c', fixture + broken + 'resolve_devices\n'],
-                                capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('dm node parsed as VG', result.stderr)
+        with tempfile.TemporaryDirectory() as temporary:
+            env = dict(os.environ, TEST_LOCK=str(Path(temporary) / 'lock'))
+            locked = fixture + 'exec 9> "$TEST_LOCK"\nflock -n 9\n'
+            check_lock = r'''[[ -e /proc/self/fd/9 ]]
+if flock -n "$TEST_LOCK" true 9>&-; then echo 'parent lock lost' >&2; exit 79; fi
+exec 9>&-
+flock -n "$TEST_LOCK" true
+'''
+            fixed = subprocess.run(['bash', '-c', locked + function + 'resolve_devices\n' + check_lock],
+                                   env=env, capture_output=True, text=True)
+            self.assertEqual(fixed.returncode, 0, fixed.stderr)
+            broken = function.replace('"$VG/$ROOT_LV"', '"$ROOT_DEVICE"')
+            result = subprocess.run(['bash', '-c', locked + broken + 'resolve_devices\n'],
+                                    env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('dm node parsed as VG', result.stderr)
+            leaky = function.replace('"$VG/$ROOT_LV" 9>&-', '"$VG/$ROOT_LV"')
+            result = subprocess.run(['bash', '-c', locked + leaky + 'resolve_devices\n'],
+                                    env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('inherited lock fd', result.stderr)
+
 
 
 class ExtraSerialDiscoveryTests(unittest.TestCase):

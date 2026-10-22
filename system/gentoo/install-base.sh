@@ -360,7 +360,7 @@ copy_continuation_bundle() {
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh "$TARGET_ROOT/usr/local/sbin/ms1504-extra"
     mkdir -p "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/lib" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/sources"
-    for name in source-only-emerge.py cpu-policy.py lib/repository-policy.sh lib/devices.sh lib/hardware-discovery.sh sources/gentoo-repository.lock complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
+    for name in workspace-retention.py source-only-emerge.py cpu-policy.py lib/repository-policy.sh lib/devices.sh lib/hardware-discovery.sh sources/gentoo-repository.lock complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
         install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
     done
     for name in "${GENTOO_PACKAGES_DESKTOP:-}" "${GENTOO_PACKAGES_DESKTOP_USE:-}" \

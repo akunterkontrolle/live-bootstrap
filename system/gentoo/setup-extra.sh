@@ -9,22 +9,28 @@ MODE=${1:---plan}; shift || true
 case "$MODE" in --plan|plan) MODE=plan ;; --migrate|migrate) MODE=migrate ;;
     --initialize|initialize) MODE=initialize ;; --resume|resume) MODE=resume ;;
     --restore|restore) MODE=restore ;; --verify|verify) MODE=verify ;;
+    --retention-plan|retention-plan) MODE=retention-plan ;;
     --discard-migration|discard-migration) MODE=discard-migration ;;
-    *) echo 'Usage: ms1504-extra {plan|migrate [--source MOUNT]|initialize --source MOUNT|resume|restore|verify|discard-migration}' >&2; exit 2 ;; esac
+    *) echo 'Usage: ms1504-extra {plan|retention-plan --source MOUNT|migrate [--source MOUNT]|initialize --source MOUNT|resume|restore|verify|discard-migration}' >&2; exit 2 ;; esac
 
 . "$(dirname -- "$(readlink -f "$0")")/lib/devices.sh"
 gentoo_die() { fail "$@"; }
 
 fail() { printf 'ms1504-extra: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"; }
-for command in awk blkid blockdev chmod chown cryptsetup date dd df du find findmnt flock grep id install lsblk lvs mkdir mkfs.ext4 mount mountpoint mv rc-service rc-update readlink rm rsync sed sha256sum sgdisk sort stat sync tail tr udevadm umount wc xargs; do need "$command"; done
+for command in wipefs mktemp cmp python3 awk blkid blockdev chmod chown cryptsetup date dd df du find findmnt flock grep id install lsblk lvs mkdir mkfs.ext4 mount mountpoint mv rc-service rc-update readlink rm rsync sed sha256sum sgdisk sort stat sync tail tr udevadm umount wc xargs; do need "$command"; done
 [ "$(id -u)" = 0 ] || fail 'run as root.'
 case "$-" in *x*) fail 'disable shell tracing before using the extra-disk helper.' ;; esac
 
 IDENTITY=/etc/ms1504-extra-identity
 ROOT_IDENTITY=/etc/ms1504-root-identity
-STATE=/var/lib/ms1504-extra
-MIGRATION=/home/.ms1504-workspace-migration
+STATE_BASE=/var/lib/ms1504-extra
+MIGRATION_BASE=/home/.ms1504-workspace-migration
+STATE=$STATE_BASE
+MIGRATION=$MIGRATION_BASE
+RETENTION_TOOL="$(dirname -- "$(readlink -f "$0")")/workspace-retention.py"
+RETENTION_POLICY=full
+RSYNC_SELECTION=()
 DATA=$MIGRATION/data
 KEY=/root/.keys/ms1504-extra.key
 MAPPER=ms1504-extra
@@ -73,13 +79,93 @@ else
 fi
 
 [[ ! -L $STATE ]] || fail 'extra state directory must not be a symlink.'
-if [[ $MODE != plan ]]; then
+if [[ $MODE != plan && $MODE != retention-plan ]]; then
     mkdir -p "$STATE"; chmod 0700 "$STATE"
     [[ $(stat -c '%u:%g:%a' "$STATE") == 0:0:700 ]] || fail 'state directory ownership or mode is unsafe.'
     exec 9>"$STATE/lock"
     flock -n 9 || fail 'another extra-disk operation is running.'
 fi
 [[ ! -L $MOUNT ]] || fail '/extra mountpoint must not be a symlink.'
+
+# The base lock serializes old and selected migration journals alike.
+use_selected_migration() {
+    STATE=$STATE_BASE/installed-continuation-v1
+    MIGRATION=$MIGRATION_BASE/installed-continuation-v1
+    DATA=$MIGRATION/data
+    RETENTION_POLICY=installed-continuation-v1
+    [[ ! -L $STATE && ! -L $MIGRATION && ! -L $MIGRATION_BASE ]] || fail 'selected migration paths are unsafe.'
+    local excludes marker
+    for marker in initialize.started initialize.done partition.done luks.started luks.done filesystem.started filesystem.done restore.done; do
+        [[ ! -e $STATE_BASE/$marker ]] || fail 'legacy initialization conflicts with the selected migration journal.'
+    done
+    excludes=$(python3 "$RETENTION_TOOL" excludes) || fail 'cannot read retention policy.'
+    RSYNC_SELECTION=()
+    while IFS= read -r pattern; do RSYNC_SELECTION+=("--exclude=$pattern"); done <<< "$excludes"
+}
+
+check_retention_policy() {
+    [[ $RETENTION_POLICY != full ]] || return 0
+    [[ -f $STATE/retention-policy.json && ! -L $STATE/retention-policy.json ]] || fail 'selected migration policy receipt is missing.'
+    local current recorded
+    current=$(python3 "$RETENTION_TOOL" policy) || fail 'cannot read current retention policy.'
+    recorded=$(cat "$STATE/retention-policy.json")
+    [[ $current == "$recorded" ]] || fail 'retention policy changed; do not reuse this migration journal.'
+}
+
+if [[ -e $STATE_BASE/active-migration || -L $STATE_BASE/active-migration ]]; then
+    [[ -f $STATE_BASE/active-migration && ! -L $STATE_BASE/active-migration &&
+        $(stat -c '%u:%g:%a' "$STATE_BASE/active-migration") == 0:0:600 &&
+        $(cat "$STATE_BASE/active-migration") == installed-continuation-v1 ]] || fail 'invalid active migration selector.'
+    use_selected_migration
+    check_retention_policy
+fi
+
+check_installed_continuation() {
+    python3 "$RETENTION_TOOL" installed
+    python3 "$(dirname "$RETENTION_TOOL")/cpu-policy.py" \
+        --receipt /etc/portage/native-cpu-policy.json --detector /usr/bin/cpuid2cpuflags --compiler /usr/bin/gcc
+}
+
+select_migration_policy() {
+    [[ $RETENTION_POLICY == full ]] || return 0
+    local marker
+    for marker in initialize.started initialize.done partition.done luks.started luks.done filesystem.started filesystem.done restore.done; do
+        [[ ! -e $STATE_BASE/$marker ]] || fail 'legacy extra initialization has started; retaining its full-migration journal.'
+    done
+    # Keep all legacy receipts and the legacy /data tree separate and unchanged.
+    use_selected_migration
+    mkdir -p "$STATE"; chmod 0700 "$STATE"
+    [[ $(stat -c '%u:%g:%a' "$STATE") == 0:0:700 ]] || fail 'selected state ownership is unsafe.'
+    if [[ -e $STATE/retention-policy.json ]]; then
+        check_retention_policy
+    else
+        python3 "$RETENTION_TOOL" policy > "$STATE/retention-policy.json.tmp"
+        chmod 0600 "$STATE/retention-policy.json.tmp"
+        sync "$STATE/retention-policy.json.tmp"
+        mv "$STATE/retention-policy.json.tmp" "$STATE/retention-policy.json"
+    fi
+    printf 'installed-continuation-v1\n' > "$STATE_BASE/active-migration.tmp"
+    chmod 0600 "$STATE_BASE/active-migration.tmp"; sync "$STATE_BASE/active-migration.tmp"
+    mv "$STATE_BASE/active-migration.tmp" "$STATE_BASE/active-migration"; sync "$STATE_BASE"
+}
+
+check_retained_source() {
+    [[ $RETENTION_POLICY != full ]] || return 0
+    check_retention_policy
+    python3 "$RETENTION_TOOL" snapshot "$SOURCE_MOUNT" > "$STATE/source.snapshot.tmp"
+    if [[ -e $STATE/source.snapshot ]]; then
+        cmp -s "$STATE/source.snapshot" "$STATE/source.snapshot.tmp" || fail 'retained source changed since migration started; preserve the journal and inspect it.'
+        rm "$STATE/source.snapshot.tmp"
+    else
+        [[ ! -e $STATE/migration.started ]] || fail 'started migration lacks its retained source snapshot.'
+        sync "$STATE/source.snapshot.tmp"; mv "$STATE/source.snapshot.tmp" "$STATE/source.snapshot"; sync "$STATE"
+    fi
+}
+
+workspace_copy_differences() {
+    rsync -aHAXnci --modify-window=-1 --out-format='%i%f' --numeric-ids --one-file-system --delete \
+        "${RSYNC_SELECTION[@]}" "$SOURCE_MOUNT/" "$DATA/" | awk '$NF !~ /(^|\/)\.$/ {print}'
+}
 
 disk_serial() {
     local disk=${1} value
@@ -109,7 +195,7 @@ resolve_devices() {
     mountpoint -q /home || fail '/home is not mounted; migration must be on encrypted home.'
     [[ $(readlink -f "$(findmnt -rn -M /home -o SOURCE)") == "$HOME_DEVICE" ]] || fail '/home is not the installed home LV.'
     # lvs expects an LV name; /dev/dm-N may be parsed as a VG name.
-    root_devs=$(lvs --noheadings --options devices "$VG/$ROOT_LV" | tr -d '[:space:]')
+    root_devs=$(lvs --noheadings --options devices "$VG/$ROOT_LV" 9>&- | tr -d '[:space:]')
     [[ -n $root_devs ]] || fail 'cannot identify the physical root backing device.'
     root_disks=$(lsblk -s -lnpo NAME,TYPE "$ROOT_DEVICE" | awk '$2 == "disk" {print $1}')
     [[ $(printf '%s\n' "$root_disks" | wc -l) -eq 1 ]] || fail 'root LV does not resolve to exactly one physical disk.'
@@ -143,23 +229,34 @@ tree_manifest() {
 }
 
 validate_home_migration() {
+    check_retention_policy
     [[ ! -L $MIGRATION && ! -L $DATA && -d $MIGRATION && -d $DATA ]] || fail 'migration staging tree is missing or unsafe.'
     [[ $(stat -c '%u:%g:%a' "$MIGRATION") == 0:0:700 && $(stat -c '%u:%g:%a' "$DATA") == 0:0:700 ]] || fail 'migration staging must be root-owned mode 0700.'
     [[ $(findmnt -rn -T "$DATA" -o TARGET) == /home ]] || fail 'migration data is not stored on /home.'
     [[ -s $STATE/migration.done && -s $STATE/workspace.sha256 ]] || fail 'workspace migration is incomplete.'
     grep -Fxq "extra serial=$EXTRA_SERIAL" "$STATE/migration.done" || fail 'migration belongs to another extra disk.'
     (cd "$DATA" && sha256sum --check --status "$STATE/workspace.sha256") || fail 'preserved migration data failed its file hash manifest.'
+    if [[ $RETENTION_POLICY != full ]]; then
+        grep -Fxq "retention policy sha256=$(sha256sum "$STATE/retention-policy.json" | awk '{print $1}')" "$STATE/migration.done" || fail 'migration receipt has a different retention policy.'
+        python3 "$RETENTION_TOOL" snapshot --strict "$DATA" > "$STATE/staging.snapshot.tmp"
+        cmp -s "$STATE/source.snapshot" "$STATE/staging.snapshot.tmp" || fail 'retained staging metadata or content changed.'
+        rm "$STATE/staging.snapshot.tmp"
+    fi
 }
 
 check_workspace_source() {
-    local source=$1 device parent actual_uuid actual_label
+    local source=$1 device parent actual_uuid actual_label source_options aliases
     source=$(readlink -f "$source")
     mountpoint -q "$source" || fail "workspace source is not a mountpoint: $source"
     [[ $source != / && $source != /home && $source != "$MIGRATION"* && $source != "$MOUNT"* ]] || fail 'unsafe workspace source mountpoint.'
     device=$(findmnt -rn -M "$source" -o SOURCE)
     [[ -b $device ]] || fail 'workspace source is not a block device.'
-    [[ $(blkid -s TYPE -o value "$device") == ext4 ]] || fail 'workspace source is not ext4.'
-    actual_uuid=$(blkid -s UUID -o value "$device"); actual_label=$(blkid -s LABEL -o value "$device")
+    source_options=$(findmnt -rn -M "$source" -o OPTIONS)
+    [[ ,$source_options, == *,ro,* ]] || fail 'workspace source must be mounted read-only.'
+    aliases=$(findmnt -rn -S "$device" -o TARGET)
+    [[ $aliases == "$source" ]] || fail 'workspace source is also mounted elsewhere; unmount aliases before migration.'
+    [[ $(blkid -p -D -s TYPE -o value "$device") == ext4 ]] || fail 'workspace source is not ext4.'
+    actual_uuid=$(blkid -p -D -s UUID -o value "$device"); actual_label=$(blkid -p -D -s LABEL -o value "$device")
     [[ ${actual_uuid,,} == ${WORKSPACE_UUID,,} && $actual_label == "$WORKSPACE_LABEL" ]] || fail 'workspace source UUID/label differs from the installed identity.'
     if [[ $PROFILE == hardware ]]; then
         parent=$(lsblk -dnro PKNAME "$device" | tr -d '[:space:]')
@@ -181,7 +278,7 @@ mount_recorded_hardware_workspace() {
     [[ -n $candidates && $(printf '%s\n' "$candidates" | wc -l) -eq 1 ]] || fail 'recorded workspace UUID is ambiguous.'
     device=$(readlink -f "$candidates")
     [[ -b $device ]] || fail 'recorded workspace is not a block device.'
-    [[ $(blkid -s TYPE -o value "$device") == ext4 && $(blkid -s LABEL -o value "$device") == "$WORKSPACE_LABEL" ]] || fail 'recorded workspace type or label differs.'
+    [[ $(blkid -p -D -s TYPE -o value "$device") == ext4 && $(blkid -p -D -s LABEL -o value "$device") == "$WORKSPACE_LABEL" ]] || fail 'recorded workspace type or label differs.'
     parent=$(lsblk -dnro PKNAME "$device" | tr -d '[:space:]')
     [[ -n $parent && $(readlink -f "/dev/$parent") == "$EXTRA_REAL" ]] || fail 'recorded workspace is not on the identified extra disk.'
     target=/mnt/gentoo-workspace
@@ -219,7 +316,13 @@ copy_and_verify_migration() {
         chmod 0700 "$MIGRATION"
         [[ ! -d $DATA ]] || chmod 0700 "$DATA"
     fi
-    source_bytes=$(du -sx --block-size=1 "$SOURCE_MOUNT" | awk 'NR==1 {print $1}')
+    if [[ $RETENTION_POLICY == full ]]; then
+        source_bytes=$(du -sx --block-size=1 "$SOURCE_MOUNT" | awk 'NR==1 {print $1}')
+    else
+        python3 "$RETENTION_TOOL" report "$SOURCE_MOUNT"
+        source_bytes=$(python3 "$RETENTION_TOOL" bytes "$SOURCE_MOUNT")
+        check_retained_source
+    fi
     available=$(df -B1 --output=avail /home | awk 'NR==2 {print $1}')
     staged_bytes=0
     [[ ! -d $DATA ]] || staged_bytes=$(du -sx --block-size=1 "$DATA" | awk 'NR==1 {print $1}')
@@ -232,31 +335,106 @@ copy_and_verify_migration() {
     printf 'started %s\nsource device=%s\nsource UUID=%s\nextra serial=%s\n' \
         "$(date -u +%FT%TZ)" "$SOURCE_DEVICE" "$WORKSPACE_UUID" "$EXTRA_SERIAL" > "$STATE/migration.started.tmp"
     sync "$STATE/migration.started.tmp"; mv "$STATE/migration.started.tmp" "$STATE/migration.started"; sync "$STATE"
-    rsync -aHAX --numeric-ids --sparse --one-file-system --delete "$SOURCE_MOUNT/" "$DATA/"
+    rsync -aHAXc --modify-window=-1 --numeric-ids --sparse --one-file-system --delete "${RSYNC_SELECTION[@]}" "$SOURCE_MOUNT/" "$DATA/"
     chown 0:0 "$MIGRATION" "$DATA"; chmod 0700 "$MIGRATION" "$DATA"
     tree_manifest "$DATA" "$STATE/workspace.sha256.tmp"
     sync "$STATE/workspace.sha256.tmp"; mv "$STATE/workspace.sha256.tmp" "$STATE/workspace.sha256"
     (cd "$DATA" && sha256sum --check "$STATE/workspace.sha256")
     local differences
-    differences=$(rsync -aHAXnci --out-format='%i%f' --numeric-ids --one-file-system --delete "$SOURCE_MOUNT/" "$DATA/" | awk '$NF !~ /(^|\/)\.$/ {print}')
+    differences=$(workspace_copy_differences)
     [[ -z $differences ]] || fail "staging copy differs from the source: $differences"
+    check_retained_source
+    if [[ $RETENTION_POLICY != full ]]; then
+        python3 "$RETENTION_TOOL" snapshot --strict "$DATA" > "$STATE/staging.snapshot.tmp"
+        cmp -s "$STATE/source.snapshot" "$STATE/staging.snapshot.tmp" || fail 'retained staging content or metadata differs from source.'
+        rm "$STATE/staging.snapshot.tmp"
+    fi
     printf 'complete %s\nsource device=%s\nsource UUID=%s\nextra serial=%s\nworkspace allocated bytes=%s\nfiles=%s\n' \
         "$(date -u +%FT%TZ)" "$SOURCE_DEVICE" "$WORKSPACE_UUID" "$EXTRA_SERIAL" "$source_bytes" "$(wc -l < "$STATE/workspace.sha256")" > "$STATE/migration.done.tmp"
+    if [[ $RETENTION_POLICY != full ]]; then
+        printf 'retention policy sha256=%s\n' "$(sha256sum "$STATE/retention-policy.json" | awk '{print $1}')" >> "$STATE/migration.done.tmp"
+    fi
     sync "$STATE/migration.done.tmp"; mv "$STATE/migration.done.tmp" "$STATE/migration.done"; sync "$STATE"
+}
+
+extra_probe_type() {
+    local device=$1 status=0
+    EXTRA_SIGNATURE=$(blkid -p -D -s TYPE -o value "$device") || status=$?
+    case $status in
+        0) [[ -n $EXTRA_SIGNATURE ]] || fail "empty successful signature probe: $device" ;;
+        2) [[ -z $EXTRA_SIGNATURE ]] || fail "inconsistent absent signature probe: $device" ;;
+        *) fail "signature probe failed ($status): $device; refusing to infer blank storage." ;;
+    esac
+}
+
+extra_require_blank() {
+    local device=$1 signatures
+    extra_probe_type "$device"
+    [[ -z $EXTRA_SIGNATURE ]] || fail "existing signature on $device: $EXTRA_SIGNATURE"
+    signatures=$(wipefs --no-act --noheadings --output TYPE "$device") || fail "cannot inspect signatures: $device"
+    [[ -z $signatures ]] || fail "storage is not verified blank: $device"
+}
+
+extra_check_mounts() {
+    local allowed=${1:-} table children child major targets
+    table=$(findmnt -rn -o MAJ:MIN,TARGET) || fail 'cannot inspect mounted filesystems.'
+    [[ -n $table ]] || fail 'mount inventory is empty.'
+    children=$(lsblk -nrpo NAME "$EXTRA_REAL") || fail 'cannot inspect extra-disk descendants.'
+    [[ ${children%%$'\n'*} == "$EXTRA_REAL" ]] || fail 'invalid extra-disk descendant inventory.'
+    while IFS= read -r child; do
+        major=$(lsblk -dnro MAJ:MIN "$child") || fail 'cannot inspect descendant device identity.'
+        [[ $major =~ ^[0-9]+:[0-9]+$ ]] || fail 'invalid descendant device identity.'
+        targets=$(printf '%s\n' "$table" | awk -v id="$major" '$1 == id {print $2}')
+        [[ -z $targets || ( -n $allowed && $targets == "$allowed" && "$child" == "$SOURCE_DEVICE" ) ]] ||
+            fail "extra-disk descendant is mounted: $child at $targets"
+    done <<< "$children"
+}
+
+extra_partition_identity() {
+    local parent type number label
+    [[ -b $EXTRA_PART ]] || fail 'extra partition is unavailable.'
+    parent=$(lsblk -dnro PKNAME "$EXTRA_PART") || fail 'cannot read extra partition parent.'
+    [[ -n $parent && $(readlink -f "/dev/$parent") == "$EXTRA_REAL" ]] || fail 'extra partition has a different physical parent.'
+    type=$(blkid -p -s PART_ENTRY_TYPE -o value "$EXTRA_PART") || fail 'cannot read extra partition type.'
+    number=$(blkid -p -s PART_ENTRY_NUMBER -o value "$EXTRA_PART") || fail 'cannot read extra partition number.'
+    label=$(blkid -p -s PART_ENTRY_NAME -o value "$EXTRA_PART") || fail 'cannot read extra partition label.'
+    EXTRA_PART_UUID=$(blkid -p -s PART_ENTRY_UUID -o value "$EXTRA_PART") || fail 'cannot read extra partition UUID.'
+    [[ ${type,,} == ca7d7ccb-63ed-4c53-861c-1742536059cc && $number == 1 && $label == MS1504-EXTRA &&
+        $EXTRA_PART_UUID =~ ^[A-Fa-f0-9-]{36}$ ]] || fail 'extra GPT partition identity differs.'
+}
+
+extra_verify_partition_receipt() {
+    extra_partition_identity
+    [[ -s $STATE/partition.done ]] && grep -Fxq "partition UUID=$EXTRA_PART_UUID" "$STATE/partition.done" ||
+        fail 'extra partition differs from its durable receipt.'
+}
+
+extra_verify_key() {
+    local key_digest
+    [[ -f $KEY && ! -L $KEY && $(stat -c '%u:%g:%a:%s' "$KEY") == 0:0:400:64 ]] || fail 'original 64-byte root-only extra key is missing or unsafe.'
+    if [[ $RETENTION_POLICY != full || -e $STATE/key.done ]]; then
+        [[ -f $STATE/key.done && ! -L $STATE/key.done ]] || fail 'extra key receipt is missing.'
+        key_digest=$(sha256sum "$KEY") || fail 'cannot hash the original extra key.'
+        key_digest=${key_digest%% *}
+        [[ $key_digest =~ ^[0-9a-f]{64}$ ]] || fail 'invalid extra key digest.'
+        grep -Fxq "key sha256=$key_digest" "$STATE/key.done" || fail 'extra key differs from its durable receipt.'
+    fi
 }
 
 verify_target_mount() {
     local source luks_uuid filesystem_uuid
+    extra_verify_partition_receipt
+    extra_verify_key
     cryptsetup status "$MAPPER" >/dev/null 2>&1 || fail 'extra LUKS mapping is not open.'
     source=$(cryptsetup status "$MAPPER" | sed -n 's/^[[:space:]]*device:[[:space:]]*//p')
     [[ -b $source && $(readlink -f "$source") == "$(readlink -f "$EXTRA_PART")" ]] || fail 'extra mapper is backed by another partition.'
     mountpoint -q "$MOUNT" || fail '/extra is not mounted.'
     [[ $(readlink -f "$(findmnt -rn -M "$MOUNT" -o SOURCE)") == "$(readlink -f "/dev/mapper/$MAPPER")" ]] || fail '/extra is mounted from an unexpected device.'
-    [[ $(blkid -s LABEL -o value "/dev/mapper/$MAPPER") == "$WORKSPACE_LABEL" ]] || fail '/extra filesystem lost the workspace label.'
+    [[ $(blkid -p -D -s LABEL -o value "/dev/mapper/$MAPPER") == "$WORKSPACE_LABEL" ]] || fail '/extra filesystem lost the workspace label.'
     luks_uuid=$(cryptsetup luksUUID "$EXTRA_PART")
-    filesystem_uuid=$(blkid -s UUID -o value "/dev/mapper/$MAPPER")
-    [[ ! -s $STATE/luks.done ]] || grep -Fxq "LUKS UUID=$luks_uuid" "$STATE/luks.done" || fail 'LUKS UUID differs from its receipt.'
-    [[ ! -s $STATE/filesystem.done ]] || grep -Fxq "UUID=$filesystem_uuid" "$STATE/filesystem.done" || fail 'filesystem UUID differs from its receipt.'
+    filesystem_uuid=$(blkid -p -D -s UUID -o value "/dev/mapper/$MAPPER")
+    [[ -s $STATE/luks.done ]] && grep -Fxq "LUKS UUID=$luks_uuid" "$STATE/luks.done" || fail 'LUKS UUID differs from its receipt.'
+    [[ -s $STATE/filesystem.done ]] && grep -Fxq "UUID=$filesystem_uuid" "$STATE/filesystem.done" || fail 'filesystem UUID differs from its receipt.'
 }
 
 configure_openrc() {
@@ -296,8 +474,8 @@ start() {
     fi
     source=$(cryptsetup status "$MAPPER" | sed -n 's/^[[:space:]]*device:[[:space:]]*//p')
     [ -n "$source" ] && [ "$(readlink -f "$source")" = "$(readlink -f "$device")" ] || { eend 1 "unexpected mapper source"; return 1; }
-    [ "$(blkid -s TYPE -o value "/dev/mapper/$MAPPER")" = ext4 ] &&
-        [ "$(blkid -s LABEL -o value "/dev/mapper/$MAPPER")" = "$LABEL" ] || { eend 1 "unexpected extra filesystem"; return 1; }
+    [ "$(blkid -p -D -s TYPE -o value "/dev/mapper/$MAPPER")" = ext4 ] &&
+        [ "$(blkid -p -D -s LABEL -o value "/dev/mapper/$MAPPER")" = "$LABEL" ] || { eend 1 "unexpected extra filesystem"; return 1; }
     mkdir -p "$MOUNT"
     if mountpoint -q "$MOUNT"; then
         mounted=$(findmnt -rn -M "$MOUNT" -o SOURCE)
@@ -338,8 +516,14 @@ case "$MODE" in
         home_free=$(df -B1 --output=avail /home | awk 'NR==2 {print $1}')
         printf 'Profile: %s\nRoot disk: %s (%s)\nExtra disk: %s (%s; %s bytes)\nWorkspace: UUID=%s label=%s\n' \
             "$PROFILE" "$ROOT_DISK" "$ROOT_SERIAL" "$EXTRA_REAL" "$EXTRA_SERIAL" "$EXTRA_BYTES" "$WORKSPACE_UUID" "$WORKSPACE_LABEL"
+        printf 'Migration policy: %s\n' "$RETENTION_POLICY"
         printf 'Migration destination: %s on encrypted /home (%s bytes currently free)\nEncrypted restore: %s; key: %s\nPlan only; no disk changes made.\n' \
             "$MIGRATION" "$home_free" "$MOUNT" "$KEY"
+        ;;
+    retention-plan)
+        [[ $# -eq 2 && $1 == --source ]] || fail 'retention-plan requires --source MOUNT.'
+        check_workspace_source "$2"
+        python3 "$RETENTION_TOOL" report "$SOURCE_MOUNT"
         ;;
     migrate)
         if [[ $# -eq 0 ]]; then
@@ -348,6 +532,8 @@ case "$MODE" in
             [[ $# -eq 2 && $1 == --source ]] || fail 'usage: migrate [--source MOUNT].'
             check_workspace_source "$2"
         fi
+        check_installed_continuation
+        select_migration_policy
         copy_and_verify_migration
         echo 'Workspace copy and file manifest verified; source disk is unchanged.'
         ;;
@@ -355,28 +541,27 @@ case "$MODE" in
         [[ $# -eq 2 && $1 == --source ]] || fail 'initialize requires --source MOUNT for a final content comparison.'
         validate_home_migration
         check_workspace_source "$2"
-        differences=$(rsync -aHAXnci --out-format='%i%f' --numeric-ids --one-file-system --delete "$SOURCE_MOUNT/" "$DATA/" | awk '$NF !~ /(^|\/)\.$/ {print}')
+        check_retained_source
+        differences=$(workspace_copy_differences)
         [[ -z $differences ]] || fail 'workspace changed after migration; rerun migrate and inspect its manifest.'
         [[ ! -e $STATE/initialize.started && ! -e $STATE/initialize.done ]] || fail 'initialization has already started; inspect state and use resume.'
         mountpoint -q "$MOUNT" && fail '/extra is mounted; stop its service and unmount before initialization.'
         cryptsetup status "$MAPPER" >/dev/null 2>&1 && fail 'extra mapper is already open; stop its service and inspect it before initialization.'
         [[ ! -e $KEY && ! -L $KEY ]] || fail 'extra key path already exists; inspect it rather than replacing it.'
         [[ ! -L /root/.keys ]] || fail 'root key directory must not be a symlink.'
-        while read -r child; do
-            [[ -n $child ]] || continue
-            child_mount=$(findmnt -rn -S "$child" -o TARGET 2>/dev/null || true)
-            [[ -z $child_mount || ( $child_mount == "$SOURCE_MOUNT" && $(readlink -f "$child") == "$SOURCE_DEVICE" ) ]] ||
-                fail "extra disk child is mounted outside the verified workspace source: $child at $child_mount"
-        done < <(lsblk -lnrpo NAME "$EXTRA_REAL")
+        extra_check_mounts "$SOURCE_MOUNT"
         expected="ERASE-EXTRA $EXTRA_SERIAL $EXTRA_MAJMIN"
-        partitions=$(lsblk -lnrpo NAME,TYPE "$EXTRA_REAL" | awk '$2 == "part" {print $1}')
-        unexpected=$(lsblk -lnrpo TYPE "$EXTRA_REAL" | tail -n +2 | grep -Ev '^part$' || true)
+        topology=$(lsblk -nrpo NAME,TYPE "$EXTRA_REAL") || fail 'cannot read extra-disk topology.'
+        [[ -n $topology ]] || fail 'empty extra-disk topology.'
+        partitions=$(printf '%s\n' "$topology" | awk '$2 == "part" {print $1}')
+        unexpected=$(printf '%s\n' "$topology" | awk 'NR > 1 && $2 != "part" {print}')
         [[ -z $unexpected ]] || fail "extra disk has unexpected mapped descendants: $unexpected"
         if [[ $PROFILE == hardware ]]; then
             [[ $(printf '%s\n' "$partitions" | wc -l) -eq 1 && $(readlink -f "$partitions") == "$SOURCE_DEVICE" ]] ||
                 fail 'hardware extra disk must contain only the verified mounted workspace partition.'
         else
             [[ -z $partitions ]] || fail 'VM extra target already has partitions; inspect it instead of reformatting.'
+            extra_require_blank "$EXTRA_REAL"
         fi
         printf 'This erases the identified extra disk after the workspace copy has been verified.\nType exactly: %s\n' "$expected" > /dev/tty
         IFS= read -r confirmation < /dev/tty
@@ -384,25 +569,38 @@ case "$MODE" in
         printf 'started %s\nserial=%s\nsize=%s\nmajor:minor=%s\n' "$(date -u +%FT%TZ)" "$EXTRA_SERIAL" "$EXTRA_BYTES" "$EXTRA_MAJMIN" > "$STATE/initialize.started.tmp"
         sync "$STATE/initialize.started.tmp"; mv "$STATE/initialize.started.tmp" "$STATE/initialize.started"; sync "$STATE"
         install -d -m 0700 /root/.keys
-        key_tmp="$KEY.tmp.$$"; dd if=/dev/urandom of="$key_tmp" bs=64 count=1 iflag=fullblock status=none
-        chmod 0400 "$key_tmp"; sync "$key_tmp"; mv "$key_tmp" "$KEY"
+        [[ $(stat -c '%u:%g:%a' /root/.keys) == 0:0:700 ]] || fail 'extra key directory is unsafe.'
+        key_tmp=$(mktemp /root/.keys/.ms1504-extra.XXXXXX)
+        dd if=/dev/urandom of="$key_tmp" bs=64 count=1 iflag=fullblock status=none
+        chmod 0400 "$key_tmp"; sync "$key_tmp"; mv "$key_tmp" "$KEY"; sync /root/.keys
+        key_digest=$(sha256sum "$KEY") || fail 'cannot hash the new extra key.'
+        key_digest=${key_digest%% *}
+        [[ $key_digest =~ ^[0-9a-f]{64}$ ]] || fail 'invalid new extra key digest.'
+        printf 'key sha256=%s\n' "$key_digest" > "$STATE/key.done.tmp"
+        sync "$STATE/key.done.tmp"; mv "$STATE/key.done.tmp" "$STATE/key.done"; sync "$STATE"
+        extra_verify_key
         if [[ $PROFILE == hardware ]]; then umount "$SOURCE_MOUNT"; fi
-        while read -r child; do [[ -z $child ]] || [[ -z $(findmnt -rn -S "$child" -o TARGET 2>/dev/null || true) ]] || fail "extra disk child remains mounted after workspace unmount: $child"; done < <(lsblk -lnrpo NAME "$EXTRA_REAL")
+        extra_check_mounts
         sgdisk --zap-all --clear --new=1:0:0 --typecode=1:8309 --change-name=1:MS1504-EXTRA "$EXTRA_REAL"
         sync; blockdev --rereadpt "$EXTRA_REAL"; udevadm settle --timeout=30
         [[ -b $EXTRA_PART ]] || fail 'partition did not appear; leave the disk unchanged and inspect it.'
-        printf 'partition UUID=%s\n' "$(blkid -s PARTUUID -o value "$EXTRA_PART")" > "$STATE/partition.done.tmp"
+        extra_partition_identity
+        printf 'partition UUID=%s\n' "$EXTRA_PART_UUID" > "$STATE/partition.done.tmp"
         sync "$STATE/partition.done.tmp"; mv "$STATE/partition.done.tmp" "$STATE/partition.done"; sync "$STATE"
         set --
         ;&
     resume)
         [[ $# -eq 0 ]] || fail 'resume takes no additional arguments.'
+        validate_home_migration
         [[ -s $STATE/initialize.started && -s $STATE/partition.done ]] || fail 'resume requires durable initialization and partition receipts; inspect before proceeding.'
+        extra_partition_identity
         grep -Fxq "serial=$EXTRA_SERIAL" "$STATE/initialize.started" && grep -Fxq "size=$EXTRA_BYTES" "$STATE/initialize.started" &&
             grep -Fxq "major:minor=$EXTRA_MAJMIN" "$STATE/initialize.started" &&
-            grep -Fxq "partition UUID=$(blkid -s PARTUUID -o value "$EXTRA_PART")" "$STATE/partition.done" || fail 'extra partition identity changed.'
-        [[ -f $KEY && ! -L $KEY && $(stat -c '%u:%g:%a' "$KEY" 2>/dev/null || true) == 0:0:400 ]] || fail 'original root-only extra key is missing or unsafe.'
-        if cryptsetup isLuks "$EXTRA_PART"; then
+            grep -Fxq "partition UUID=$EXTRA_PART_UUID" "$STATE/partition.done" || fail 'extra partition identity changed.'
+        extra_verify_key
+        extra_probe_type "$EXTRA_PART"
+        if [[ $EXTRA_SIGNATURE == crypto_LUKS ]]; then
+            cryptsetup isLuks "$EXTRA_PART" || fail 'LUKS signature has no readable header; inspect manually.'
             cryptsetup open --test-passphrase --key-file "$KEY" "$EXTRA_PART" || fail 'LUKS header does not match the recorded key.'
             luks_uuid=$(cryptsetup luksUUID "$EXTRA_PART")
             if [[ -s $STATE/luks.done ]]; then
@@ -412,46 +610,64 @@ case "$MODE" in
                 sync "$STATE/luks.done.tmp"; mv "$STATE/luks.done.tmp" "$STATE/luks.done"; sync "$STATE"
             fi
         else
+            [[ -z $EXTRA_SIGNATURE ]] || fail "unexpected signature on extra partition: $EXTRA_SIGNATURE"
             [[ ! -e $STATE/luks.done ]] || fail 'LUKS header is missing despite a completion receipt; inspect manually.'
             [[ ! -e $STATE/luks.started ]] || fail 'LUKS formatting was interrupted without a readable header; inspect manually before any reformat.'
-            printf 'started %s\n' "$(date -u +%FT%TZ)" > "$STATE/luks.started"; sync "$STATE/luks.started"
+            extra_require_blank "$EXTRA_PART"
+            extra_check_mounts
+            printf 'started %s\n' "$(date -u +%FT%TZ)" > "$STATE/luks.started.tmp"
+            sync "$STATE/luks.started.tmp"; mv "$STATE/luks.started.tmp" "$STATE/luks.started"; sync "$STATE"
             cryptsetup luksFormat --batch-mode --type luks2 --pbkdf argon2id --label MS1504-EXTRA --key-file "$KEY" "$EXTRA_PART"
             cryptsetup isLuks "$EXTRA_PART" || fail 'LUKS header verification failed.'
-            printf 'LUKS UUID=%s\n' "$(cryptsetup luksUUID "$EXTRA_PART")" > "$STATE/luks.done.tmp"
+            luks_uuid=$(cryptsetup luksUUID "$EXTRA_PART") || fail 'cannot read the new LUKS UUID.'
+            [[ $luks_uuid =~ ^[A-Fa-f0-9-]{36}$ ]] || fail 'invalid new LUKS UUID.'
+            printf 'LUKS UUID=%s\n' "$luks_uuid" > "$STATE/luks.done.tmp"
             sync "$STATE/luks.done.tmp"; mv "$STATE/luks.done.tmp" "$STATE/luks.done"; sync "$STATE"
         fi
+        luks_uuid=$(cryptsetup luksUUID "$EXTRA_PART")
         if ! cryptsetup status "$MAPPER" >/dev/null 2>&1; then cryptsetup open --key-file "$KEY" "$EXTRA_PART" "$MAPPER"; fi
         mapper_source=$(cryptsetup status "$MAPPER" | sed -n 's/^[[:space:]]*device:[[:space:]]*//p')
         [[ -n $mapper_source && $(readlink -f "$mapper_source") == "$(readlink -f "$EXTRA_PART")" ]] || fail 'existing extra mapper belongs to another partition.'
         mkdir -p "$MOUNT"
-        filesystem=$(blkid -s TYPE -o value "/dev/mapper/$MAPPER" 2>/dev/null || true)
+        extra_probe_type "/dev/mapper/$MAPPER"
+        filesystem=$EXTRA_SIGNATURE
         if [[ $filesystem == ext4 ]]; then
-            [[ $(blkid -s LABEL -o value "/dev/mapper/$MAPPER") == "$WORKSPACE_LABEL" ]] || fail 'existing extra filesystem has an unexpected label.'
+            [[ -s $STATE/filesystem.started || -s $STATE/filesystem.done ]] || fail 'ext4 exists without a recorded format intent.'
+            [[ $(blkid -p -D -s LABEL -o value "/dev/mapper/$MAPPER") == "$WORKSPACE_LABEL" ]] || fail 'existing extra filesystem has an unexpected label.'
         elif [[ -z $filesystem ]]; then
             [[ ! -e $STATE/filesystem.done ]] || fail 'filesystem is missing despite a completion receipt; inspect manually.'
             [[ ! -e $STATE/filesystem.started ]] || fail 'filesystem formatting was interrupted; inspect the mapper manually.'
-            printf 'started %s\n' "$(date -u +%FT%TZ)" > "$STATE/filesystem.started"; sync "$STATE/filesystem.started"
+            extra_require_blank "/dev/mapper/$MAPPER"
+            extra_check_mounts
+            printf 'started %s\n' "$(date -u +%FT%TZ)" > "$STATE/filesystem.started.tmp"
+            sync "$STATE/filesystem.started.tmp"; mv "$STATE/filesystem.started.tmp" "$STATE/filesystem.started"; sync "$STATE"
             mkfs.ext4 -F -m 0 -L "$WORKSPACE_LABEL" "/dev/mapper/$MAPPER"
         else fail "unexpected filesystem on the extra mapper: $filesystem"; fi
-        blkid -s TYPE -o value "/dev/mapper/$MAPPER" | grep -Fxq ext4 || fail 'extra filesystem verification failed.'
-        filesystem_uuid=$(blkid -s UUID -o value "/dev/mapper/$MAPPER")
+        blkid -p -D -s TYPE -o value "/dev/mapper/$MAPPER" | grep -Fxq ext4 || fail 'extra filesystem verification failed.'
+        filesystem_uuid=$(blkid -p -D -s UUID -o value "/dev/mapper/$MAPPER") || fail 'cannot read the extra filesystem UUID.'
+        [[ $filesystem_uuid =~ ^[A-Fa-f0-9-]{36}$ ]] || fail 'invalid extra filesystem UUID.'
         if [[ -s $STATE/filesystem.done ]]; then
             grep -Fxq "label=$WORKSPACE_LABEL" "$STATE/filesystem.done" && grep -Fxq "UUID=$filesystem_uuid" "$STATE/filesystem.done" || fail 'filesystem identity differs from its durable receipt.'
         else
             printf 'label=%s\nUUID=%s\n' "$WORKSPACE_LABEL" "$filesystem_uuid" > "$STATE/filesystem.done.tmp"
             sync "$STATE/filesystem.done.tmp"; mv "$STATE/filesystem.done.tmp" "$STATE/filesystem.done"; sync "$STATE"
         fi
+        printf 'complete %s\npartition UUID=%s\nLUKS UUID=%s\nfilesystem UUID=%s\n' \
+            "$(date -u +%FT%TZ)" "$EXTRA_PART_UUID" "$luks_uuid" "$filesystem_uuid" > "$STATE/initialize.done.tmp"
+        sync "$STATE/initialize.done.tmp"; mv "$STATE/initialize.done.tmp" "$STATE/initialize.done"; sync "$STATE"
         echo 'Encrypted extra filesystem is initialized; use restore to copy and verify the workspace.'
         ;;
     restore)
         [[ $# -eq 0 ]] || fail 'restore takes no additional arguments.'
         validate_home_migration
+        extra_verify_partition_receipt
+        extra_verify_key
         [[ -s $STATE/filesystem.done && -f $KEY && ! -L $KEY ]] || fail 'encrypted extra filesystem is not initialized; use resume.'
         if ! cryptsetup status "$MAPPER" >/dev/null 2>&1; then cryptsetup open --key-file "$KEY" "$EXTRA_PART" "$MAPPER"; fi
         [[ -b /dev/mapper/$MAPPER ]] || fail 'extra mapper is unavailable.'
         mapper_source=$(cryptsetup status "$MAPPER" | sed -n 's/^[[:space:]]*device:[[:space:]]*//p')
         [[ -n $mapper_source && $(readlink -f "$mapper_source") == "$(readlink -f "$EXTRA_PART")" ]] || fail 'existing extra mapper belongs to another partition.'
-        [[ $(blkid -s TYPE -o value "/dev/mapper/$MAPPER") == ext4 && $(blkid -s LABEL -o value "/dev/mapper/$MAPPER") == "$WORKSPACE_LABEL" ]] || fail 'extra mapper does not contain the expected workspace filesystem.'
+        [[ $(blkid -p -D -s TYPE -o value "/dev/mapper/$MAPPER") == ext4 && $(blkid -p -D -s LABEL -o value "/dev/mapper/$MAPPER") == "$WORKSPACE_LABEL" ]] || fail 'extra mapper does not contain the expected workspace filesystem.'
         if mountpoint -q "$MOUNT"; then verify_target_mount; else mount "/dev/mapper/$MAPPER" "$MOUNT"; fi
         verify_target_mount
         required=$(sed -n 's/^workspace allocated bytes=//p' "$STATE/migration.done")
@@ -459,9 +675,9 @@ case "$MODE" in
         required=$((required + required / 20 + 536870912))
         available=$(df -B1 --output=avail "$MOUNT" | awk 'NR==2 {print $1}')
         [[ $available =~ ^[0-9]+$ && $available -ge $required ]] || fail "actual /extra filesystem free space is insufficient: need $required bytes including reserve, have ${available:-unknown}."
-        rsync -aHAX --numeric-ids --sparse --one-file-system --delete --exclude=/lost+found "$DATA/" "$MOUNT/"
+        rsync -aHAX --modify-window=-1 --numeric-ids --sparse --one-file-system --delete --exclude=/lost+found "$DATA/" "$MOUNT/"
         (cd "$MOUNT" && sha256sum --check "$STATE/workspace.sha256")
-        differences=$(rsync -aHAXnci --out-format='%i%f' --exclude=/lost+found --numeric-ids --one-file-system --delete "$DATA/" "$MOUNT/" | awk '$NF !~ /(^|\/)\.$/ {print}')
+        differences=$(rsync -aHAXnci --modify-window=-1 --out-format='%i%f' --exclude=/lost+found --numeric-ids --one-file-system --delete "$DATA/" "$MOUNT/" | awk '$NF !~ /(^|\/)\.$/ {print}')
         [[ -z $differences ]] || fail "restored /extra differs from verified migration: $differences"
         verify_target_mount
         configure_openrc "$(cryptsetup luksUUID "$EXTRA_PART")"
@@ -481,7 +697,7 @@ case "$MODE" in
         verify_target_mount
         (cd "$MOUNT" && sha256sum --check --status "$STATE/workspace.sha256") || fail '/extra contents differ from the verified workspace manifest.'
         if [[ -d $DATA ]]; then
-            differences=$(rsync -aHAXnci --out-format='%i%f' --exclude=/lost+found --numeric-ids --one-file-system --delete "$DATA/" "$MOUNT/" | awk '$NF !~ /(^|\/)\.$/ {print}')
+            differences=$(rsync -aHAXnci --modify-window=-1 --out-format='%i%f' --exclude=/lost+found --numeric-ids --one-file-system --delete "$DATA/" "$MOUNT/" | awk '$NF !~ /(^|\/)\.$/ {print}')
             [[ -z $differences ]] || fail "/extra tree differs from retained migration data: $differences"
         fi
         printf 'complete %s\nfile manifest and rsync tree comparison=passed\n' "$(date -u +%FT%TZ)" > "$STATE/verify.done.tmp"
@@ -504,7 +720,7 @@ case "$MODE" in
             grep -Fxq "LUKS UUID=$(cryptsetup luksUUID "$EXTRA_PART")" "$STATE/restore.done" || fail 'restore receipt belongs to another extra device.'
         validate_home_migration; verify_target_mount
         (cd "$MOUNT" && sha256sum --check --status "$STATE/workspace.sha256") || fail 'restored /extra no longer matches the migration manifest.'
-        differences=$(rsync -aHAXnci --out-format='%i%f' --exclude=/lost+found --numeric-ids --one-file-system --delete "$DATA/" "$MOUNT/" | awk '$NF !~ /(^|\/)\.$/ {print}')
+        differences=$(rsync -aHAXnci --modify-window=-1 --out-format='%i%f' --exclude=/lost+found --numeric-ids --one-file-system --delete "$DATA/" "$MOUNT/" | awk '$NF !~ /(^|\/)\.$/ {print}')
         [[ -z $differences ]] || fail "restored /extra changed since verification: $differences"
         expected="DELETE-MIGRATION $EXTRA_SERIAL"
         printf 'This removes the temporary workspace copy from encrypted /home.\nType exactly: %s\n' "$expected" > /dev/tty
