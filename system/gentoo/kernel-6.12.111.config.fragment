@@ -150,6 +150,12 @@ CONFIG_LOCALVERSION=""
 ## Portable x86-64 kernel; native userspace policy does not affect Kbuild.
 CONFIG_GENERIC_CPU=y
 CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+## init=/bin/bash has no userspace governor service. Request build performance
+## without requiring a daemon to raise CPU clocks after the cold handoff.
+CONFIG_CPU_FREQ=y
+CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
+# CONFIG_CPU_FREQ_DEFAULT_GOV_USERSPACE is not set
 # CONFIG_CC_OPTIMIZE_FOR_SIZE is not set
 CONFIG_STACKPROTECTOR=y
 CONFIG_STACKPROTECTOR_STRONG=y
