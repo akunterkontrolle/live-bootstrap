@@ -24,7 +24,9 @@ class KernelPolicyTests(unittest.TestCase):
             config.write_text(fragment)
             self.assertEqual(self.shell(root, 'kernel_check_config ' + shlex.quote(str(config))).returncode, 0)
             for symbol in ('CONFIG_GENERIC_CPU', 'CONFIG_FORTIFY_SOURCE', 'CONFIG_STACKPROTECTOR_STRONG',
-                           'CONFIG_HARDENED_USERCOPY', 'CONFIG_STRICT_KERNEL_RWX', 'CONFIG_RANDOMIZE_BASE'):
+                           'CONFIG_HARDENED_USERCOPY', 'CONFIG_STRICT_KERNEL_RWX', 'CONFIG_RANDOMIZE_BASE',
+                           'CONFIG_CPU_FREQ', 'CONFIG_CPU_FREQ_GOV_PERFORMANCE',
+                           'CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE'):
                 config.write_text(fragment.replace(symbol + '=y', '# ' + symbol + ' is not set'))
                 result = self.shell(root, 'kernel_check_config ' + shlex.quote(str(config)))
                 self.assertNotEqual(result.returncode, 0)

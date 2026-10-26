@@ -54,6 +54,67 @@ gentoo_by_id_target() { read_fixture_link "$FIXTURE/${1##*/}"; }
             self.assertNotEqual(result.returncode, 0, result.stderr)
             self.assertIn('missing or ambiguous', result.stderr)
 
+    def test_scsi_model_truncation_retains_all_other_identity_checks(self):
+        self.observed.write_text('/dev/fixture-a|SERIAL|1000|naa.500abc|Samsung SSD 850\n')
+        model = 'Samsung SSD 850 PRO 1TB'
+        result = self.resolve(model=model)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '/dev/fixture-a\n')
+        for changes in ({'serial': 'WRONG'}, {'wwn': '0x999'}, {'maximum': 999},
+                        {'model': 'Samsung SSD 870 EVO 2TB'}):
+            arguments = {'model': model, **changes}
+            self.assertNotEqual(self.resolve(**arguments).returncode, 0)
+
+    def test_model_matching_accepts_only_exact_or_full_scsi_field(self):
+        for actual, expected, accepted in (
+                ('Samsung SSD 850', 'Samsung SSD 850 PRO 1TB', True),
+                ('Samsung SSD 870', 'Samsung SSD 870 EVO 2TB', True),
+                ('Samsung SSD 850 PRO 1TB', 'Samsung SSD 850 PRO 1TB', True),
+                ('1234567890123456', '12345678901234567', True),
+                ('Samsung', 'Samsung SSD 850 PRO 1TB', False),
+                ('Samsung SSD 85', 'Samsung SSD 850 PRO 1TB', False),
+                ('Samsung SSD 850 P', 'Samsung SSD 850', False),
+                ('Disk', 'Disk Model', False),
+                ('', 'Samsung SSD 850 PRO 1TB', False)):
+            with self.subTest(actual=actual, expected=expected):
+                script = ('. ' + shlex.quote(str(GENTOO / 'lib/hardware-discovery.sh'))
+                          + '\ngentoo_model_matches ' + shlex.quote(actual) + ' ' + shlex.quote(expected))
+                result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_installer_whole_disk_check_uses_shared_model_rule(self):
+        source = (GENTOO / 'install-base.sh').read_text()
+        function = 'check_disk() {' + source.split('check_disk() {', 1)[1].split('resolve_disks() {', 1)[0]
+        script = '. ' + shlex.quote(str(GENTOO / 'lib/hardware-discovery.sh')) + '\n' + r'''
+set -Eeuo pipefail
+fail() { echo "$*" >&2; exit 19; }
+[() { if [[ $# == 3 && $1 == -b && $2 == /dev/fixture-a ]]; then return 0; fi; builtin [ "$@"; }
+lsblk() { case "$*" in *TYPE*) echo disk;; *SIZE*) echo 1000;; esac; }
+readlink() { echo /dev/fixture-a; }
+gentoo_disk_serial() { echo SERIAL; }
+gentoo_disk_attribute() { case "$1" in MODEL) echo 'Samsung SSD 850';; WWN) echo 0x500abc;; esac; }
+''' + function + "\ncheck_disk /dev/fixture-a SERIAL 900 1100 0x500abc 'Samsung SSD 850 PRO 1TB'\n"
+        result = subprocess.run(['bash', '-c', script], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '/dev/fixture-a\n')
+
+    def test_workspace_recheck_accepts_the_same_scsi_model(self):
+        self.observed.write_text('/dev/fixture-a|SERIAL|1000|0x500abc|Samsung SSD 850\n')
+        script = ('. ' + shlex.quote(str(GENTOO / 'lib/devices.sh')) + '\n'
+                  + self.prefix + r'''
+[() { if [[ $# == 3 && $1 == -b && $2 == /dev/fixture-a ]]; then return 0; fi; builtin [ "$@"; }
+readlink() { echo /sys/devices/block/fixture-a; }
+GENTOO_HARDWARE_DISKS_EXTRA_BY_ID=/dev/disk/by-id/ata-target
+GENTOO_HARDWARE_DISKS_EXTRA_SERIAL=SERIAL
+GENTOO_HARDWARE_DISKS_EXTRA_MIN_BYTES=900
+GENTOO_HARDWARE_DISKS_EXTRA_MAX_BYTES=1100
+GENTOO_HARDWARE_DISKS_EXTRA_WWN=0x500abc
+GENTOO_HARDWARE_DISKS_EXTRA_MODEL='Samsung SSD 850 PRO 1TB'
+gentoo_check_hardware_workspace /dev/fixture-a1
+''')
+        result = subprocess.run(['bash', '-c', script], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_two_matching_kernel_disks_are_ambiguous_even_with_a_by_id_link(self):
         self.observed.write_text(self.observed.read_text() + '/dev/fixture-c|SERIAL|1000|0x500abc|Disk Model\n')
         (self.root / 'ata-target').symlink_to('/dev/fixture-a')

@@ -78,7 +78,11 @@ gentoo_check_hardware_workspace() {
             actual=$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
             expected=$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
         fi
-        [ "$actual" = "$expected" ] || gentoo_die "workspace disk $field mismatch"
+        if [ "$field" = MODEL ]; then
+            gentoo_model_matches "$actual" "$expected" || gentoo_die 'workspace disk MODEL mismatch'
+        else
+            [ "$actual" = "$expected" ] || gentoo_die "workspace disk $field mismatch"
+        fi
     done
 }
 

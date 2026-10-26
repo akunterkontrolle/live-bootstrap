@@ -1,113 +1,146 @@
-# Source-built Gentoo base
+# Source-built Gentoo: operator guide
 
-This continuation takes live-bootstrap to a multilib Gentoo base with encrypted
-root, home and swap, a login account, sudo, locale and wired networking.
-**The repaired VM has booted successfully; the consolidated procedure still
-requires a fresh VM replay. Destructive T440p installation is not yet cleared.**
-The base boot and clean reboot are the checkpoint. Signing, recovery generations,
-firmware changes, workspace migration, encrypted `/extra` and desktop completion
-have separate review and acceptance gates. The first T440p boot may use its
-existing unsigned firmware boot route.
+Build live-bootstrap into a multilib Gentoo base with encrypted root, home and
+swap, a login account, sudo and wired networking. **The base checkpoint is an
+installed boot followed by a clean reboot.** `/extra` and desktop are later steps.
 
-## Before starting
+| Status | Evidence / remaining work |
+| --- | --- |
+| Current development VM | Installed base boots; encrypted `/extra` migration, restore, verification and reboot passed; OpenRC user service starts after PAM configuration and reboot. |
+| Fresh replay | Still required from original bootstrap with no pasted repairs or edited receipts. Other base checks must be recorded. |
+| Desktop | Dependency-policy fixes are in source; build and graphical-login acceptance pending. |
+| T440p | Current bootstrap runs on verified extra SSD. Early bootstrap disk selection/formatting needs correction before another fresh hardware run; hardware acceptance pending. |
+| Later stages | Signing, rollback, firmware and general upgrades retain separate reviews. Audio acceptance is deferred to real hardware. |
 
-Run host commands from the repository root. Use Python 3.11+, Bash, QEMU
-(`qemu-system-x86_64`, `qemu-img`), util-linux (`blkid`, `losetup`, `mount`,
-`umount`), e2fsprogs, psmisc `fuser`, xz and GnuPG `gpgv`. Install `socat` for
-the printed serial-console command. VM lifecycle operations use sudo so they
-can inspect open images and mount the stopped workspace read-only. Build
-prerequisites inside the bootstrap environment are checked by the driver.
+Run **host** commands from the repository root. **Bootstrap root** means the
+root shell in the original/bootstrap system; **installed user** means the login
+account in the installed Gentoo system. Replace example paths and resources for
+your run. Keep passwords and keys out of configuration files.
 
-Copy `config.example.toml` to a local operator file and edit it before building.
-`--cores`, `--qemu-ram` and `--target-size` select original-bootstrap resources;
-TOML independently controls later source/Portage concurrency, account, locale,
-layout and package policy. Passwords, passphrases and private keys never belong
-in TOML. Package-policy paths resolve relative to the TOML and are copied into
-the immutable bundle. Keep the selected TOML with the run record.
+## 1. Prepare and preserve
 
-The VM defaults to 128 GiB workspace, 128 GiB scratch, 500 GiB root and 128 GiB
-extra images, in addition to the original bootstrap disk. Root capacity grows
-to fit the configured layout when first created. Workspace/scratch are ext4;
-root/extra begin as empty containers. Images are sparse, but require actual
-host free space as builds grow. Before Gentoo system builds, checks require
-50 GiB free inside the workspace and 24 GiB inside scratch, plus recorded host
-headroom of 8 GiB for workspace and 70 GiB for scratch. Budget more for retained
-sources, backup copies and later builds. The example below allocates 48 GiB RAM
-and 18 cores; reduce concurrency and resource arguments to suit the host.
-Hardware uses the existing workspace for scratch and requires at least 70 GiB
-free there. A full source build takes substantial time; retain logs and caches.
+1. Install host tools: Python 3.11+, Bash, QEMU, util-linux, e2fsprogs, psmisc,
+   xz and `gpgv`; add `socat` for the printed serial-console command.
+2. Save and boot-test an independent powered-off copy of any working VM before
+   new validation. Include all backing chains, launcher records, configuration
+   and boot artifacts. Use a separate directory and fresh images for a replay.
+3. Budget real disk space for growing sparse images and backups. VM defaults:
+   128 GiB workspace, 128 GiB scratch, 500 GiB root, 128 GiB extra, plus the
+   original bootstrap disk. Hardware workspace needs at least 70 GiB free.
+   TOML storage roles: `[layout]` allocates root/swap/home/reserve **inside the
+   root disk**; `[workspace]` identifies the separate build filesystem;
+   `[images]` sizes whole virtual disks and applies only to the VM. For example,
+   `layout.root_gib = 200` is a root LV inside `images.root_gib = 500`.
+4. Keep the VM's recorded CPU model unchanged. Gentoo packages use native CPU
+   optimization detected on the actual guest/target; a VM build is not a
+   transferable T440p installation.
 
-## Preserve the working fallback
+See [OPERATIONS.md](OPERATIONS.md) for resource checks, configuration semantics,
+backup verification and source-authentication limits.
 
-Before validation, shut the successful VM down completely. Save an independent
-copy **outside Git** of every image and its complete backing chain, the original
-bootstrap media, TOML, launcher JSON records, immutable inputs, receipts, and
-kernel/initramfs artifacts. Inspect each qcow2 image with
-`qemu-img info --backing-chain IMAGE`. Copy every dependency or create standalone
-copies with `qemu-img convert` while powered off. A linked snapshot alone is not
-an independent backup. Record checksums and original paths.
+## 2. Start a fresh VM
 
-Boot-test an isolated working copy of that backup, with launcher paths adjusted
-to its copied images; ensure no disk path still points to the original. Keep
-the saved backup unchanged after the test. The launcher records absolute paths,
-so moving a directory alone does not relocate a runnable installation. Inspect
-the saved record and full QEMU command before starting the copy. Retain the
-previous working launcher and CPU model for this test; consolidated CPU checks
-cannot certify an older base that predates CPU receipts.
-
-Use an entirely separate target/run directory and fresh images for acceptance.
-Changing flags in the repaired base cannot retroactively optimize its packages.
-Backup creation and its boot test remain required operational work; repository
-unit tests do not perform them.
-
-## VM: original bootstrap through installed base
-
-1. **Host:** choose a new target directory. The following is a complete fresh-run
-   example, without prebuilt package or early-stage seeds:
+1. **Host:** copy the configuration, edit concurrency/account/locale/layout,
+   and start the original bootstrap. Adjust the example's 18 cores and 48 GiB RAM.
 
    ```sh
    cp system/gentoo/config.example.toml my-gentoo.toml
-   # Edit my-gentoo.toml, especially concurrency and layout.
    ./rootfs.py --qemu --target target-gentoo-fresh \
      --cores 18 --qemu-ram 49152 --target-size 32G \
      --extra-builds gentoo --gentoo-config my-gentoo.toml
    ```
 
-   The host prepares images under `target-gentoo-fresh/gentoo-run`, records the
-   original QEMU arguments, prints the serial connection command, and captures
-   `console.log` in that run directory. The original bootstrap's final hook
-   starts the Gentoo build automatically. Keep the recorded CPU model unchanged
-   throughout the run, including resume and installed boots.
+   The launcher creates workspace/scratch filesystems and empty root/extra
+   images under `target-gentoo-fresh/gentoo-run`. It records the CPU/QEMU command,
+   prints the serial connection command and saves `console.log`. Gentoo starts
+   automatically after the original bootstrap.
 
-2. **Guest root console:** at `SHUTDOWN MILESTONE`, use the **exact printed**
-   `cd /; bash .../shutdown.sh` command. The message does not itself power off.
-   The helper stops the verified DHCP daemon, unmounts children before parents,
-   and refuses poweroff if mounts remain busy. Do not exit the PID-1 Bash shell
-   or kill QEMU as the normal shutdown procedure. Wait for QEMU to exit.
+2. **Bootstrap root:** at `SHUTDOWN MILESTONE`, run the exact printed
+   `cd /; bash .../shutdown.sh` command. Wait for QEMU to exit. Keep the PID-1
+   shell alive until shutdown; the milestone message alone does not power off.
 
-3. **Host, VM stopped:** cold-boot the saved modern kernel:
+3. **Host, VM stopped:** boot the saved modern kernel.
 
    ```sh
    sudo python3 system/gentoo/vm.py continue \
      --run-dir target-gentoo-fresh/gentoo-run --apply
    ```
 
-   The launcher verifies the handoff and kernel source signature. **Guest root:**
+4. **Bootstrap root:** start or resume the Gentoo build.
 
    ```sh
    /usr/local/sbin/gentoo-resume
    ```
 
-   This bootstrap-root entry works before `/build` is mounted. It verifies its
-   helpers, mounts virtual filesystems and the recorded workspace UUID, checks
-   the immutable source bundle, restores wired DHCP/DNS, and invokes the durable
-   build. It verifies the running kernel and CPU inputs before continuation.
-   The build proceeds through native CPU detection, Gentoo toolchains,
-   multilib `@system`, and base runtime packages. After an interrupted build,
-   rerun this entry on the modern bootstrap kernel.
+   This restores mounts, recorded workspace and wired networking, verifies
+   inputs/CPU/kernel, and builds the native multilib base. After interruption,
+   boot the same modern bootstrap kernel and rerun this command. When the base
+   runtime completes, continue with section 4.
 
-4. **Guest root, base runtime complete:** select the recorded immutable bundle
-   and inspect the installation proposal:
+## 3. Prepare and start the T440p
+
+1. **Rescue/live Linux on the T440p, read-only preflight:** verify backups and
+   a bootable rescue route; record existing firmware boot commands. Identify
+   physical disks, wired networking and available storage.
+
+   ```sh
+   lsblk -p -b -o NAME,TYPE,SIZE,FSTYPE,LABEL,UUID,MODEL,SERIAL,WWN
+   blkid -c /dev/null
+   lscpu
+   ip -br address
+   ip route
+   df -h
+   ```
+
+   Configure observed serial, capacity bounds, canonical sysfs model and WWN
+   for root/extra, plus serial/capacity for the protected USB boot medium.
+   Root, extra and boot must be different disks. Missing by-id links are supported;
+   conflicting links or ambiguous identities stop discovery.
+
+2. **Resolve the early bootstrap/workspace integration before a new run.**
+   The original kernel-bootstrap path defaults to `DISK=sda`, partitions/formats
+   it and moves the bootstrap root there **before Gentoo's identity checks**.
+   A pre-created workspace on that disk is overwritten. Do not start another
+   fresh hardware run until early disk selection/confirmation is corrected.
+
+   In the current run, the operator verified this filesystem is on the intended
+   extra SSD. Reuse it as `GENTOO_BUILD` by reconciling its label/configured UUID,
+   without formatting again. It serves both as the bootstrap `/` and, when
+   mounted at `/build`, the Gentoo workspace. Follow
+   [HARDWARE-WORKSPACE.md](HARDWARE-WORKSPACE.md) for the actual disk roles,
+   recovery requirements and outstanding integration work.
+
+3. **Future fresh-run gate:** correct/review the early formatter above, complete
+   the fresh VM replay and review the T440p preflight before proceeding.
+   **Host:** after that integration review, configure the observed identities
+   and the chosen workspace discovery policy.
+
+   ```sh
+   cp system/gentoo/config.example.toml my-t440p.toml
+   python3 system/gentoo/prepare.py --config my-t440p.toml \
+     --mode hardware --output /tmp/gentoo-t440p-inputs
+   ./rootfs.py --bare-metal --target target-t440p-fresh \
+     --extra-builds gentoo --gentoo-config my-t440p.toml
+   ```
+
+   Prepare the bootstrap USB using the original bootstrap media procedure and
+   a verified device choice. Boot using the existing firmware route. Gentoo
+   starts automatically and detects CPU features on the T440p.
+
+4. **Bootstrap root:** at the modern-kernel milestone, run the printed shutdown
+   helper. Follow the [hardware kernel handoff](HARDWARE-WORKSPACE.md#modern-kernel-handoff)
+   to boot the saved modern kernel against the **bootstrap root**, then run:
+
+   ```sh
+   /usr/local/sbin/gentoo-resume
+   ```
+
+   After the native base build completes, follow section 4. Firmware flashing
+   and signing enforcement are outside this base procedure.
+
+## 4. Install the base — VM or T440p
+
+1. **Bootstrap root:** select this run's immutable driver and inspect its plan.
 
    ```sh
    inputs=$(cat /build/gentoo-bootstrap/current-inputs)
@@ -116,269 +149,139 @@ unit tests do not perform them.
    bash "$driver" plan
    ```
 
-   Verify that the target is the run's root image and that boot, workspace,
-   scratch and extra remain distinct. The plan does not initialize storage.
+   Verify root target identity and protected boot/workspace disks. On hardware,
+   recheck serial, WWN, model and capacity against your preflight record.
 
-5. **Guest root, destructive boundary:** initialize the new root image:
+2. **Destructive boundary:** initialize the configured root disk.
 
    ```sh
    bash "$driver" storage-init
    ```
 
-   Review the displayed identity and type the exact `ERASE <serial> <major:minor>`
-   confirmation. This creates GPT, LUKS2, LVM and root/home/swap filesystems;
-   passphrases are prompted interactively. After interruption, inspect `plan`
-   and use **`storage-resume`**, never another initialization:
+   Type the displayed `ERASE <serial> <major:minor>` confirmation, then answer
+   passphrase prompts. This creates GPT/LUKS2/LVM and root/home/swap.
+   **After an interruption**, inspect the plan and resume instead:
 
    ```sh
    bash "$driver" plan
    bash "$driver" storage-resume
    ```
 
-   Completed volumes are preserved. If you cancelled at the new-passphrase
-   prompt after partitioning, `storage-resume` verifies the recorded partition
-   is blank and asks for a `CREATE LUKS …` confirmation before creating LUKS.
-   Mismatched new passphrases retry before any format intent is recorded.
-   A format-start receipt without completion stops for inspection. Do not edit
-   receipts to force progress.
+   Completed volumes are preserved. Stop on unverifiable format intent; never
+   edit receipts or restart initialization to force progress.
 
-6. **Guest root:** install or resume copying/configuring the base:
+3. **Bootstrap root:** install or resume the base, answering password prompts.
 
    ```sh
    bash "$driver" install-root
    ```
 
-   This prompts for the unlock passphrase and account passwords, configures
-   the installed system, and publishes kernel/initramfs artifacts and receipts.
-   It does not reformat completed storage. From `/`, run the handoff shutdown
-   command printed in step 2, then wait for QEMU to exit.
+   Run the printed handoff shutdown helper from `/` and wait for poweroff.
 
-7. **Host:** boot the installed kernel/initramfs:
+4. **VM host:** boot the installed kernel/initramfs.
 
    ```sh
    sudo python3 system/gentoo/vm.py boot-installed \
      --run-dir target-gentoo-fresh/gentoo-run --apply
    ```
 
-   **Installed guest:** unlock encrypted root and log in as the configured user.
-   Complete the checks below, reboot cleanly with `sudo reboot`, and repeat the
-   boot/login checks. QEMU directly loads the installed kernel/initramfs using
-   the tested LUKS/LVM command line; this does not exercise hardware firmware.
+   **T440p:** use the existing unsigned firmware route with the installed artifacts
+   and exact LUKS/LVM command line in
+   `gentoo-bootstrap/install-base-state/installed-boot.receipt` on the workspace.
+   See [hardware boot handoff](HARDWARE-WORKSPACE.md#installed-system-boot).
 
-## T440p: preflight and gated base workflow
+5. **Installed user:** unlock root, log in and run the
+   [base acceptance checks](OPERATIONS.md#base-verification-and-replay-acceptance):
+   sudo, locale/timezone, DHCP/DNS, root/home/swap, CPU policy, both C/C++ ABIs,
+   `uucp` group and OpenRC user runtime. Run `sudo reboot`, unlock and repeat.
+   Save results and a boot-tested independent checkpoint before continuation.
 
-1. **Read-only rescue/live Linux on the actual T440p:** retain a usable rescue
-   medium and verify that it can boot, see the disks, and unlock existing data.
-   Record the currently working firmware boot commands before making changes.
-   Collect identities and resources without formatting or changing partitions:
+## 5. Continue into encrypted `/extra`
 
-   ```sh
-   lsblk -d -b -o NAME,SIZE,SERIAL,WWN,MODEL
-   ls -l /dev/disk/by-id
-   lscpu
-   ip -br link
-   ip route
-   df -h
-   ```
-
-   Read the chosen whole disks' `/sys/class/block/NAME/device/model`, `serial`
-   and `wwid` attributes where present, and reconcile them with the configured
-   identity. Kernel model strings may be shorter than udev marketing names.
-   Configure root and extra **serial, capacity bounds, WWN and canonical model**,
-   plus protected boot-medium serial/capacity. All three disks must differ.
-   Discovery requires one unique sysfs identity match; missing by-id links are
-   supported, conflicting links refuse. `udevadm trigger` is not proof of identity.
-   Use actual-target CPU detection, check wired DHCP/DNS, storage, USB, keyboard,
-   display and rescue access. Observe existing workspace UUID, free space and
-   backing disk. The workspace must already be writable ext4; this procedure
-   does not create it. Do not initialize `/extra` during the base stage.
-
-2. **Acceptance gate:** complete the fresh VM acceptance list below and review
-   the read-only T440p preflight before recommending destructive hardware
-   installation. The remaining steps describe that later authorized run.
-   **Host:** prepare a new hardware bootstrap image with observed identities:
+1. **Installed user:** inspect identities and migration capacity.
 
    ```sh
-   cp system/gentoo/config.example.toml my-t440p.toml
-   # Fill hardware_disks and the existing workspace UUID; review all settings.
-   python3 system/gentoo/prepare.py --config my-t440p.toml \
-     --mode hardware --output /tmp/gentoo-t440p-inputs
-   ./rootfs.py --bare-metal --target target-t440p-fresh \
-     --extra-builds gentoo --gentoo-config my-t440p.toml
+   sudo ms1504-extra plan
    ```
 
-   Follow the original bootstrap's image/media instructions and existing rescue
-   route. Writing boot media is itself destructive to that medium and requires
-   a separately verified device choice. No generic `dd` target is implied here.
-   Boot on the T440p using its existing firmware route. The embedded after-hook
-   starts the Gentoo build; hardware CPU detection runs on this machine.
-
-3. **T440p bootstrap root:** at the modern-kernel milestone use the printed
-   shutdown command. With the workspace offline, a trusted host can verify the
-   kernel source/signature:
+2. **VM only:** mount the original, offline workspace read-only by recorded UUID,
+   inspect the retained selection, then copy it into encrypted `/home`.
 
    ```sh
-   python3 system/gentoo/kernel_source.py --build-root MOUNT/gentoo-bootstrap
+   workspace_uuid=$(awk -F= '$1=="workspace_uuid" {print $2}' /etc/ms1504-extra-identity)
+   test -n "$workspace_uuid"
+   sudo mkdir -p /mnt/gentoo-workspace
+   sudo mount -t ext4 -o ro,noload "UUID=$workspace_uuid" /mnt/gentoo-workspace
+   sudo ms1504-extra retention-plan --source /mnt/gentoo-workspace
+   sudo ms1504-extra migrate --source /mnt/gentoo-workspace
    ```
 
-   Replace `MOUNT` with the read-only workspace mount. Use the existing firmware
-   Linux-boot commands to load
-   `gentoo-bootstrap/artifacts/kernel-6.12.111/bzImage` from that workspace, or
-   its verified copy on the existing boot medium. Keep the bootstrap root UUID:
+   **T440p, after the hardware migration review:** one command resolves and
+   mounts the recorded workspace read-only, then copies and verifies it:
 
-   ```text
-   root=UUID=ACTUAL_BOOTSTRAP_ROOT_UUID rootfstype=ext4 init=/bin/bash rw rootwait
+   ```sh
+   sudo ms1504-extra migrate
    ```
 
-   Add the existing console arguments. Record the actual UUID; this command
-   line boots the bootstrap root, not the future encrypted root. After cold
-   boot, run `/usr/local/sbin/gentoo-resume` as root.
+   The source must be offline and not mounted elsewhere. A failed copy can be
+   retried with the same command. Wait for successful manifest verification.
+   [Retention policy](WORKSPACE-RETENTION.md) omits disposable bootstrap work
+   trees, keeps continuation artifacts and unknown files, and preserves the
+   original source. It does not preserve full bootstrap resumption on `/extra`.
 
-4. **T440p bootstrap root:** after the base runtime completes, follow VM steps
-   4–6 with this run's durable bundle. **`storage-init` erases the configured
-   physical root disk.** Recheck serial, WWN, model and capacity at the prompt.
-   Resume interrupted storage with `storage-resume`; install with `install-root`.
-   Keep the workspace and protected boot medium intact.
+3. **Destructive boundary, after copy verification and the applicable review:**
+   VM initialization erases its extra image; hardware initialization erases
+   the extra SSD **including the original workspace**.
 
-5. **T440p existing firmware route:** use the installed boot artifacts and the
-   LUKS/LVM command line recorded in the workspace's
-   `gentoo-bootstrap/install-base-state/installed-boot.receipt`. Arrange access
-   to those verified artifacts through the already working unsigned boot route;
-   do not guess a GRUB device number or copy the bootstrap-root command line.
-   Unlock, log in, verify the base, and reboot cleanly. This is a separate
-   hardware acceptance result. Firmware flashing and signing enforcement are
-   excluded from this workflow.
+   ```sh
+   sudo ms1504-extra initialize --source /mnt/gentoo-workspace
+   sudo ms1504-extra restore
+   sudo ms1504-extra verify
+   sudo reboot
+   ```
 
-## Base acceptance and recovery
+4. **After reboot:** verify automatic unlock/mount and retained data.
 
-A fresh replay must use the ordinary repository procedure with no pasted
-repairs, guest-only source fixes or edited receipts. Record run ID, repository
-commit, TOML, CPU exposure and logs. Exercise interrupted build resumption after
-the modern handoff and interrupted storage/install resumption. Preserve
-completed volume UUIDs and verify that resumption does not reformat them.
-Unexpected failures require source fixes and review, followed by repetition of
-affected gates from appropriate clean inputs.
+   ```sh
+   findmnt /extra
+   sudo ms1504-extra verify
+   sudo rc-status --all
+   ```
 
-After installed boot, check login and sudo, the configured locale/timezone,
-wired connectivity and DNS, encrypted root/home/swap activation, and both ABIs:
+   Keep migration staging, key backups and the independent base checkpoint.
+   For interrupted initialization, use the [recovery procedure](OPERATIONS.md#recovery).
 
-```sh
-sudo -v
-locale
-date
-ip -br address
-ip route
-getent hosts gentoo.org
-findmnt /
-findmnt /home
-sudo swapon --show
-sudo cryptsetup status gentoo-crypt
-sudo lvs
-sudo python3 /usr/local/libexec/gentoo-continuation/cpu-policy.py \
-  --receipt /etc/portage/native-cpu-policy.json \
-  --detector /usr/bin/cpuid2cpuflags --compiler /usr/bin/gcc
-```
+## 6. Build and test the desktop
 
-As the login user, compile, inspect and run both runtime ABIs:
+1. **Installed VM, after `/extra` verification and Rust/desktop review:**
 
-```sh
-(
-  set -eu
-  abi_dir=$(mktemp -d)
-  trap 'rm -rf -- "$abi_dir"' EXIT
-  printf '#include <stdio.h>\nint main(void) { puts("C runtime ok"); return 0; }\n' > "$abi_dir/check.c"
-  printf '#include <string>\nint main() { std::string s("runtime"); return s.size() != 7; }\n' > "$abi_dir/check.cc"
-  for abi in 32 64; do
-    gcc -m"$abi" -O2 -march=native "$abi_dir/check.c" -o "$abi_dir/c-$abi"
-    g++ -m"$abi" -O2 -march=native "$abi_dir/check.cc" -o "$abi_dir/cxx-$abi"
-    readelf -h "$abi_dir/c-$abi" "$abi_dir/cxx-$abi"
-    "$abi_dir/c-$abi"
-    "$abi_dir/cxx-$abi"
-  done
-)
-```
+   ```sh
+   sudo complete-desktop
+   ```
 
-The build's runtime receipts test both ABIs; installed execution is a separate
-acceptance check. Reboot with `sudo reboot`, unlock again, and repeat the checks.
-Keep the results with the run record.
+   The same command resumes after an inspected interruption. It changes the
+   profile/packages and builds the source Rust chain before its final desktop
+   plan; it is not a dry run. Log: `/extra/portage/logs/complete-desktop.log`.
+   The maintained desktop policy includes libdbusmenu `gtk3` and libvpx `postproc`.
 
-For bootstrap recovery, boot the saved modern kernel against the original
-bootstrap root and run `/usr/local/sbin/gentoo-resume`. This restores the recorded
-workspace and network. Inspect `/build/gentoo-bootstrap/logs`, `state`,
-`current-inputs`, `current-handoff` and `install-base-state` before retrying.
-The durable driver offers `status`, `plan`, `storage-resume` and `install-root`
-as shown above. Retain `inputs`, handoff, source caches and repair-state backups;
-they are runtime evidence, even though temporary repository repair tools have
-been retired. A failed mount or identity check is a reason to inspect the
-actual device, not to manufacture a link or completion marker. If shutdown
-reports busy mounts, leave the root shell alive, inspect the holders, and retry
-the maintained shutdown helper after releasing them.
+2. Reboot, test LightDM/Xfce login, Firefox/VLC, sudo, user services, networking,
+   `/extra`, logout and another clean reboot. **Audio is deferred to the T440p.**
 
-On the host, `vm.py status --run-dir ...` displays the run state. Omitting
-`--apply` from lifecycle commands prints their plan. Existing images are
-validated and reused without resizing or reformatting. Never launch two guests
-against the same disks. Preserve a failed run before trying new inputs.
+3. **T440p desktop is separately gated:** the current driver requires reviewed
+   signing configuration and a pending `ms1504-signed-generation` transaction. Follow
+   [CONTINUATION-PLAN.md](CONTINUATION-PLAN.md) before starting it on hardware.
+   VM desktop results do not validate graphics, audio, Wi-Fi/Bluetooth, input,
+   battery/thermals, suspend or firmware trust on the physical machine.
 
-## CPU policy and source integrity
+## Reference and later work
 
-Gentoo C/C++ packages use `-O2 -pipe -march=native -mtune=native` with
-`-fstack-protector-strong -D_FORTIFY_SOURCE=2`. A checksum-pinned cpuid2cpuflags
-prerequisite is source-built before the first ebuild; detection occurs inside
-the VM or on the T440p. Detected `CPU_FLAGS_X86` apply globally through
-`package.use/00-cpu-flags`, following
-[Gentoo's CPU flags guidance](https://wiki.gentoo.org/wiki/CPU_FLAGS_%2A).
-Gentoo's own package replaces the temporary detector in the native base.
-Semantic receipts bind the detected features and resolved compiler targets;
-changed CPU capability sets or compiler targeting stop resumption. The VM is
-tied to its recorded exposed CPU capabilities. Do not substitute host detection,
-change its CPU model, or move a native-built base to an incompatible machine.
-Earlier bootstrap toolchains keep recipe-specific flags. The kernel uses a
-portable generic x86-64 target; generated performance/hardening settings and
-compiler compatibility are checked before its build.
-
-Host, chroot and installed continuation emerge callers share source-only
-validation against the pinned Portage parser/effective settings, rejecting
-binary-enabling aliases/options, binary repositories and populated package
-caches. Keep strict Manifest verification and `-assume-digests` (the minus
-**disables** that feature). Locks and snapshot hashes verify pinned bytes; they
-do not independently authenticate upstream authors or a compromised lock edit.
-The kernel additionally has a pinned-key detached-signature check. See
-[BASE-REVIEW.md](BASE-REVIEW.md) for the reconciled findings and evidence limits.
-
-## Later work and the manual desktop alternative
-
-The installed base can be preserved and developed manually as an explicit
-alternative. First make and boot-test another powered-off backup. Keep the
-native CPU flags, detected package-use settings and source-only guard in place;
-inspect dependency plans and fetch/build through `/usr/local/sbin/emerge`.
-Select the later desktop profile deliberately, review desktop USE/keywords and
-Rust's source bootstrap before installing selected packages. Record those
-choices and validate graphical login, networking, audio and reboot separately.
-Manual changes create a new lineage; do not claim automated desktop acceptance
-or resume old installation receipts over that modified root.
-
-The existing `complete-desktop`, `ms1504-extra` and `ms1504-signed-generation` tools are
-future entry points, not commands to run at the base checkpoint. Signing and
-rollback transactions, firmware handling, workspace migration and encrypted
-`/extra`, and Rust/desktop dependency convergence need their own reviews and
-acceptance gates. [SIGNED-GENERATIONS.md](SIGNED-GENERATIONS.md) describes the
-signing design; its presence does not certify physical firmware or rescue.
-
-## Maintainer checks
-
-Run the same maintained checks as CI from the repository root with Python
-3.11.4+ (including the standard tar extraction data filter):
-
-```sh
-python3 tests/run_gentoo_checks.py --portage-archive /path/to/portage-3.0.82.2.tar.bz2
-```
-
-Use `--fetch-portage` instead to download the locked archive into a temporary
-check directory. The runner verifies its checksum, syntax-checks maintained
-shell/Python files and runs the Gentoo tests with the actual pinned Portage API.
-QEMU and ext4 tools enable disposable image/paused-CPU launcher checks. Some
-optional tests need source-built static Python/OpenSSL/zlib artifacts and Linux
-user/mount/PID namespaces; package availability checks accept an extracted pinned
-repository through `GENTOO_TEST_REPOSITORY`. Missing optional inputs report skips. CI checks do not perform the full
-VM replay or hardware preflight. Cleanup paths and coverage disposition are
-recorded in [CLEANUP.md](CLEANUP.md); images and runtime data are excluded.
+- [Operations](OPERATIONS.md): backups, resources, acceptance, recovery, CPU/source
+  policy, manual desktop alternative and CI/maintainer commands.
+- [Continuation plan](CONTINUATION-PLAN.md): detailed test gates and VM/hardware
+  acceptance matrix.
+- [Upgrade design](UPGRADE-DESIGN.md): proposed maintenance and package-pin policy;
+  a general upgrade workflow has not been implemented or validated.
+- [Signed generations](SIGNED-GENERATIONS.md): later signing/rollback design;
+  firmware flashing and trust enforcement require separate review.
+- [Base review](BASE-REVIEW.md) and [cleanup record](CLEANUP.md): audit decisions
+  and repository cleanup; images, caches and recovery data are retained.

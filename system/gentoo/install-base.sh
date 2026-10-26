@@ -85,7 +85,7 @@ check_disk() {
     real=$(readlink -f "$path"); serial=$(gentoo_disk_serial "$real"); bytes=$(lsblk -bndro SIZE "$real" | tr -d '[:space:]')
     [ "$serial" = "$expected" ] && [ "$bytes" -ge "$minimum" ] && [ "$bytes" -le "$maximum" ] || fail "serial/capacity mismatch: $path"
     if [ -n "$expected_wwn" ]; then value=$(gentoo_disk_attribute WWN "$real" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//'); [ "$value" = "$(printf '%s' "$expected_wwn" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')" ] || fail 'disk WWN mismatch.'; fi
-    if [ -n "$expected_model" ]; then value=$(gentoo_disk_attribute MODEL "$real" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); [ "$value" = "$expected_model" ] || fail 'disk model mismatch.'; fi
+    if [ -n "$expected_model" ]; then value=$(gentoo_disk_attribute MODEL "$real" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); gentoo_model_matches "$value" "$expected_model" || fail 'disk model mismatch.'; fi
     printf '%s\n' "$real"
 }
 resolve_disks() {

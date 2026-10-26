@@ -20,6 +20,18 @@ gentoo_by_id_target() {
         return 1
     fi
 }
+# SCSI INQUIRY exposes a 16-byte product field, often space padded. Accept
+# exactly that representation of a longer configured model, never an arbitrary
+# short prefix. Serial, WWN and capacity remain independently mandatory.
+gentoo_model_matches() {
+    local LC_ALL=C actual=$1 expected=$2 prefix
+    [ -n "$actual" ] && [ -n "$expected" ] || return 1
+    [ "$actual" != "$expected" ] || return 0
+    [ "${#expected}" -gt 16 ] || return 1
+    prefix=$(printf '%s' "${expected:0:16}" | sed 's/[[:space:]]*$//')
+    [ "$actual" = "$prefix" ]
+}
+
 gentoo_hardware_disk_matches() {
     local disk=$1 serial=$2 minimum=$3 maximum=$4 wwn=$5 model=$6 size value
     [ "$(gentoo_disk_serial "$disk")" = "$serial" ] || return 1
@@ -31,7 +43,7 @@ gentoo_hardware_disk_matches() {
     fi
     if [ -n "$model" ]; then
         value=$(gentoo_disk_attribute MODEL "$disk") || return 1
-        [ "$value" = "$model" ] || return 1
+        gentoo_model_matches "$value" "$model" || return 1
     fi
 }
 gentoo_resolve_hardware_disk() {
