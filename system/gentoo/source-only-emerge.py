@@ -88,6 +88,10 @@ def emerge_command(emerge):
 
 
 def run(emerge, arguments):
+    # Resolve a relative entry before leaving a potentially private home.
+    emerge = os.path.abspath(emerge)
+    # Ebuild metadata subprocesses can run as portage and cannot traverse /root.
+    os.chdir("/")
     import portage
     from _emerge.main import parse_opts
     from portage.binrepo.config import BinRepoConfigLoader

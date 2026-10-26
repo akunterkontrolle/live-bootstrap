@@ -11,6 +11,8 @@ SCRIPT_PATH=$(readlink -f -- "$0")
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
 . "$SCRIPT_DIR/config.sh"
 . "$SCRIPT_DIR/lib/repository-policy.sh"
+# Portage metadata commands drop privileges; the invoking home may be private.
+cd /
 STATE_DIR=/var/lib/ms1504-gentoo
 STATE="$STATE_DIR/desktop"
 LOCK=/run/lock/ms1504-complete-desktop.lock
@@ -90,11 +92,14 @@ PACKAGE_ACCEPT_KEYWORDS=$SCRIPT_DIR/${GENTOO_PACKAGES_DESKTOP_KEYWORDS:-desktop-
 PACKAGE_MASK=$SCRIPT_DIR/${GENTOO_PACKAGES_DESKTOP_MASK:-desktop-package.mask}
 RUST_BOOTSTRAP="$SCRIPT_DIR/desktop-rust-bootstrap.py"
 LIGHTDM_CONFIG="$SCRIPT_DIR/desktop-lightdm.conf"
-for input in "$PACKAGE_LIST" "$PACKAGE_USE" "$PACKAGE_ACCEPT_KEYWORDS" "$PACKAGE_MASK" "$RUST_BOOTSTRAP" "$LIGHTDM_CONFIG"; do
+DESKTOP_SETTINGS="$SCRIPT_DIR/desktop-settings.py"
+DESKTOP_POWER="$SCRIPT_DIR/desktop-power.py"
+USER_RUNTIME="$SCRIPT_DIR/configure-user-runtime.py"
+for input in "$PACKAGE_LIST" "$PACKAGE_USE" "$PACKAGE_ACCEPT_KEYWORDS" "$PACKAGE_MASK" "$RUST_BOOTSTRAP" "$LIGHTDM_CONFIG" "$DESKTOP_SETTINGS" "$DESKTOP_POWER" "$USER_RUNTIME"; do
     [ -s "$input" ] || die "required pinned desktop input is missing: $input"
 done
 driver_hash=$(sha256 "$SCRIPT_DIR/complete-desktop.sh")
-inputs_hash=$(sha256sum "$PACKAGE_LIST" "$PACKAGE_USE" "$PACKAGE_ACCEPT_KEYWORDS" "$PACKAGE_MASK" "$RUST_BOOTSTRAP" "$LIGHTDM_CONFIG" | sha256sum | awk '{print $1}')
+inputs_hash=$(sha256sum "$PACKAGE_LIST" "$PACKAGE_USE" "$PACKAGE_ACCEPT_KEYWORDS" "$PACKAGE_MASK" "$RUST_BOOTSTRAP" "$LIGHTDM_CONFIG" "$DESKTOP_SETTINGS" "$DESKTOP_POWER" "$USER_RUNTIME" "$SCRIPT_DIR/source-only-emerge.py" | sha256sum | awk '{print $1}')
 
 features=$(awk -F= '$1 == "FEATURES" {gsub(/"/, "", $2); sub(/^[[:space:]]+/, "", $2); sub(/[[:space:]]+$/, "", $2); print $2}' /etc/portage/make.conf)
 use=$(awk -F= '$1 == "USE" {gsub(/"/, "", $2); sub(/^[[:space:]]+/, "", $2); sub(/[[:space:]]+$/, "", $2); print $2}' /etc/portage/make.conf)
@@ -117,6 +122,11 @@ managed_config() {
         mv "$destination.tmp" "$destination"
     fi
 }
+
+python3 "$DESKTOP_SETTINGS" configure --mode "$GENTOO_MODE" --locale "$GENTOO_SYSTEM_LOCALE"
+if [ "$GENTOO_MODE" = hardware ]; then
+    python3 "$DESKTOP_POWER" prepare
+fi
 
 profile_marker="$STATE/desktop-profile.done"
 if [ ! -s "$profile_marker" ]; then
@@ -157,6 +167,13 @@ export MAKEOPTS="-j$DESKTOP_MAKE_JOBS"
 export EMERGE_DEFAULT_OPTS="--jobs=$DESKTOP_PACKAGE_JOBS --load-average=$DESKTOP_LOAD_AVERAGE --usepkg=n --getbinpkg=n --buildpkg=n"
 printf 'Desktop build parallelism: make jobs=%s; package jobs=%s; load average=%s\n' \
     "$DESKTOP_MAKE_JOBS" "$DESKTOP_PACKAGE_JOBS" "$DESKTOP_LOAD_AVERAGE"
+
+effective_args=(--receipt "$STATE/desktop-effective-inputs.json")
+if [ "$GENTOO_MODE" = hardware ]; then
+    generation_receipt=$(python3 -c 'import pathlib,tomllib; print(pathlib.Path(tomllib.loads(pathlib.Path("/etc/ms1504-generation.toml").read_text())["state"]["directory"])/"pending/transaction")')
+    effective_args+=(--generation "$generation_receipt")
+fi
+python3 "$DESKTOP_SETTINGS" record "${effective_args[@]}"
 
 # Use the same effective configuration and option checks as host/chroot builds.
 emerge() { python3 "$SCRIPT_DIR/source-only-emerge.py" /usr/bin/emerge "$@"; }
@@ -258,6 +275,13 @@ verify_desktop_login() {
 build_marker="$STATE/desktop-build.done"
 if [ ! -s "$build_marker" ]; then
     emerge --update --newuse --deep @world "${atoms[@]}"
+    # Change the session hook only after the source-built modules and
+    # pambase[elogind] are installed; protected auth changes require review.
+    python3 "$USER_RUNTIME" --provider elogind
+    if [ "$GENTOO_MODE" = hardware ]; then
+        python3 "$DESKTOP_POWER" configure
+        rc-update add cpupower boot
+    fi
     configure_desktop_login
     verify_desktop_login
     verify_desktop_audio
@@ -293,6 +317,13 @@ for atom in "${atoms[@]}"; do
 done
 verify_desktop_audio
 verify_desktop_login
+python3 "$USER_RUNTIME" --provider elogind --check
+if [ "$GENTOO_MODE" = hardware ]; then
+    python3 "$DESKTOP_POWER" configure --check
+    [ -L /etc/runlevels/boot/cpupower ] &&
+        [ "$(readlink -f /etc/runlevels/boot/cpupower)" = "$(readlink -f /etc/init.d/cpupower)" ] ||
+        die 'adaptive cpupower service is not enabled at boot.'
+fi
 for service_runlevel in 'dbus default' 'elogind boot' 'bluetooth default' 'display-manager default'; do
     read -r service runlevel <<< "$service_runlevel"
     init_script="/etc/init.d/$service"

@@ -9,3 +9,8 @@ media-video/wireplumber elogind -system-service -systemd
 # Xfce panel dbusmenu support and Firefox system-libvpx dependencies.
 dev-libs/libdbusmenu gtk3
 media-libs/libvpx postproc
+
+# Keep one packaged OpenRC desktop session provider.
+sys-auth/pambase elogind -systemd
+sys-auth/elogind pam
+x11-misc/lightdm elogind -systemd

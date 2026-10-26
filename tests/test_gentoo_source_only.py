@@ -174,6 +174,22 @@ class PinnedPortagePolicyTests(unittest.TestCase):
                 guard.run('/fixture/emerge', ['--pretend', '@system'])
             merge.assert_not_called()
 
+    def test_private_invoking_directory_is_not_inherited_by_metadata_or_emerge(self):
+        settings = self.settings()
+        previous = Path.cwd()
+        home = self.root / 'private-home'; home.mkdir(mode=0o700)
+        entry = str(home / 'emerge')
+        def merge(command, **kwargs):
+            self.assertEqual(Path.cwd(), Path('/'))
+            return subprocess.CompletedProcess(command, 0)
+        try:
+            os.chdir(home)
+            with patch.object(self.portage, 'config', return_value=settings), patch.object(guard, 'emerge_command', return_value=[sys.executable, entry]) as dispatch, patch.object(guard.subprocess, 'run', side_effect=merge):
+                self.assertEqual(guard.run('./emerge', ['--pretend', '@system']), 0)
+            dispatch.assert_called_once_with(entry)
+        finally:
+            os.chdir(previous)
+
     def test_generated_perl_environment_and_base_atoms_use_pinned_portage_syntax(self):
         from portage.dep import Atom
         from portage.exception import InvalidAtom

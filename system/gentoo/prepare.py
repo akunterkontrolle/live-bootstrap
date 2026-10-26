@@ -31,6 +31,7 @@ BUNDLE_FILES = (
     'setup-extra.sh', 'workspace-retention.py', 'complete-desktop.sh', 'desktop-packages.list',
     'desktop-package.use', 'desktop-package.accept_keywords',
     'desktop-package.mask', 'desktop-rust-bootstrap.py', 'desktop-lightdm.conf',
+    'desktop-settings.py', 'desktop-power.py', 'DESKTOP.md',
     'lib/sources.sh', 'stages/00-inputs.sh',
     'lib/toolchain.sh', 'stages/10-host-preflight.sh',
     'stages/11-binutils-elf.sh', 'stages/12-gcc-elf.sh',

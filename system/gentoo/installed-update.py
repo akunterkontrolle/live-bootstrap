@@ -28,7 +28,7 @@ REQUIRED = ('lib/installer-erase.sh', 'installed-grub.py', 'installed-update.py'
             'generation.py', 'signed-generation.py', 'generation.example.toml', 'GENERATIONS.md', 'probes/generation-lvm.py',
             'complete-desktop.sh', 'desktop-packages.list', 'desktop-package.use',
             'desktop-package.accept_keywords', 'desktop-package.mask', 'desktop-rust-bootstrap.py',
-            'desktop-lightdm.conf', 'source-only-emerge.py', 'cpu-policy.py',
+            'desktop-lightdm.conf', 'DESKTOP.md', 'desktop-settings.py', 'desktop-power.py', 'configure-user-runtime.py', 'source-only-emerge.py', 'cpu-policy.py',
             'lib/repository-policy.sh', 'lib/devices.sh', 'lib/hardware-discovery.sh',
             'sources/gentoo-repository.lock')
 DOCS = ('README.md', 'OPERATIONS.md', 'HARDWARE-WORKSPACE.md', 'CONTINUATION-PLAN.md',

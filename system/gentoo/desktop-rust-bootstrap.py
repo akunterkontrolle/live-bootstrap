@@ -14,7 +14,7 @@ def select_chain(visible, seeds, best):
     releases = [cpv for cpv in visible if release_minor(cpv) is not None]
     seeds = [cpv for cpv in seeds if cpv in releases]
     if not seeds:
-        raise ValueError("no visible source Rust ebuild declares mrustc-bootstrap")
+        raise ValueError("no visible source Rust ebuild enables mrustc-bootstrap in effective settings")
     seed = best(seeds)
     target = best(releases)
     start, end = release_minor(seed), release_minor(target)
@@ -29,17 +29,26 @@ def select_chain(visible, seeds, best):
     return chain
 
 
+
+def enabled_seeds(visible, iuse, effective_use):
+    # IUSE alone is insufficient: the pinned profile masks bootstrap on some
+    # newer Rust recipes. Never choose a seed that cannot enable source bootstrap.
+    return [cpv for cpv in visible if
+            "mrustc-bootstrap" in {flag.lstrip("+-") for flag in iuse(cpv).split()} and
+            "mrustc-bootstrap" in effective_use(cpv).split()]
+
+
 def main():
     import portage
 
     db = portage.db["/"]["porttree"].dbapi
     visible = db.xmatch("match-visible", "dev-lang/rust")
-    seeds = [
-        cpv for cpv in visible
-        if "mrustc-bootstrap" in {
-            flag.lstrip("+-") for flag in db.aux_get(cpv, ["IUSE"])[0].split()
-        }
-    ]
+    def effective_use(cpv):
+        settings = portage.config(clone=portage.settings)
+        settings.setcpv(cpv, mydb=db)
+        return settings["PORTAGE_USE"]
+
+    seeds = enabled_seeds(visible, lambda cpv: db.aux_get(cpv, ["IUSE"])[0], effective_use)
     try:
         chain = select_chain(visible, seeds, portage.best)
     except ValueError as error:
