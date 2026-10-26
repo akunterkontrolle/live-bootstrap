@@ -351,18 +351,20 @@ copy_continuation_bundle() {
     ln -sfn "/usr/local/share/gentoo-continuation/inputs/$digest/gentoo.sh" "$TARGET_ROOT/usr/local/sbin/gentoo-continue"
     ln -sfn "/usr/local/share/gentoo-continuation/inputs/$digest/install-base.sh" "$TARGET_ROOT/usr/local/sbin/gentoo-install-base"
     install -d -m 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo" "$TARGET_ROOT/usr/local/sbin"
-    for name in signed-generation.py signed-generation.example.toml SIGNED-GENERATIONS.md; do
+    for name in signed-generation.py generation.py generation.example.toml GENERATIONS.md signed-generation.example.toml SIGNED-GENERATIONS.md; do
         install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name.tmp"
         mv "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name.tmp" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
     done
-    chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/signed-generation.py"
+    chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/signed-generation.py" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/generation.py"
+    ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/generation.py "$TARGET_ROOT/usr/local/sbin/ms1504-generation"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/signed-generation.py "$TARGET_ROOT/usr/local/sbin/ms1504-signed-generation"
     install -m 0644 "$SCRIPT_DIR/signed-generation.example.toml" "$TARGET_ROOT/usr/share/ms1504-signed-generation.example.toml"
     install -m 0644 "$SCRIPT_DIR/setup-extra.sh" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh "$TARGET_ROOT/usr/local/sbin/ms1504-extra"
     mkdir -p "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/lib" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/sources"
-    for name in installed-grub.py installed-update.py workspace-retention.py source-only-emerge.py cpu-policy.py lib/repository-policy.sh lib/devices.sh lib/hardware-discovery.sh sources/gentoo-repository.lock complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
+    mkdir -p "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/probes"
+    for name in probes/generation-lvm.py installed-grub.py installed-update.py workspace-retention.py source-only-emerge.py cpu-policy.py lib/repository-policy.sh lib/devices.sh lib/hardware-discovery.sh sources/gentoo-repository.lock complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
         install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
     done
     for name in "${GENTOO_PACKAGES_DESKTOP:-}" "${GENTOO_PACKAGES_DESKTOP_USE:-}" \

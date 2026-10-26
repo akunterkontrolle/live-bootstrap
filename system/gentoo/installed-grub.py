@@ -108,6 +108,8 @@ def atomic(path, data, mode):
 def publish(root, release, root_uuid=None, check_in_chroot=False):
     root = root.resolve(strict=True)
     text, record = plan(root, release, root_uuid)
+    require(not (root / 'boot/grub/generation-policy.json').exists(),
+            'generation manager owns the boot menu; use ms1504-generation')
     require(not (root / 'etc/ms1504-signed-generation.toml').exists(),
             'signed-generation configuration exists; do not replace its menu with an unsigned base menu')
     menu = root / 'boot/grub/grub.cfg'

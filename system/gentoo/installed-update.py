@@ -22,8 +22,10 @@ SBIN = Path('/usr/local/sbin')
 STATE = Path('/var/lib/ms1504-gentoo/continuation-updates')
 EXTRA_LOCK = Path('/var/lib/ms1504-extra/lock')
 DESKTOP_LOCK = Path('/run/lock/ms1504-complete-desktop.lock')
+GENERATION_LOCK = Path('/run/ms1504-generations/lock')
 DESKTOP_STATE = Path('/var/lib/ms1504-gentoo/desktop')
 REQUIRED = ('lib/installer-erase.sh', 'installed-grub.py', 'installed-update.py', 'setup-extra.sh', 'workspace-retention.py',
+            'generation.py', 'signed-generation.py', 'generation.example.toml', 'GENERATIONS.md', 'probes/generation-lvm.py',
             'complete-desktop.sh', 'desktop-packages.list', 'desktop-package.use',
             'desktop-package.accept_keywords', 'desktop-package.mask', 'desktop-rust-bootstrap.py',
             'desktop-lightdm.conf', 'source-only-emerge.py', 'cpu-policy.py',
@@ -32,6 +34,7 @@ REQUIRED = ('lib/installer-erase.sh', 'installed-grub.py', 'installed-update.py'
 DOCS = ('README.md', 'OPERATIONS.md', 'HARDWARE-WORKSPACE.md', 'CONTINUATION-PLAN.md',
         'WORKSPACE-RETENTION.md', 'UPGRADE-DESIGN.md', 'CLEANUP.md')
 ENTRYPOINTS = {'ms1504-extra': 'setup-extra.sh', 'complete-desktop': 'complete-desktop.sh',
+               'ms1504-generation': 'generation.py', 'ms1504-signed-generation': 'signed-generation.py',
                'ms1504-grub-config': 'installed-grub.py', 'ms1504-continuation-update': 'installed-update.py'}
 
 
@@ -193,7 +196,7 @@ def activate(archive, apply=False):
     STATE.mkdir(parents=True, exist_ok=True)
     os.chmod(STATE, 0o700)
     with contextlib.ExitStack() as stack:
-        lock_paths = [STATE / 'lock', EXTRA_LOCK, DESKTOP_LOCK]
+        lock_paths = [STATE / 'lock', EXTRA_LOCK, DESKTOP_LOCK, GENERATION_LOCK]
         for path in lock_paths:
             require(not path.is_symlink(), 'unsafe operation lock: ' + str(path))
             path.parent.mkdir(parents=True, exist_ok=True)

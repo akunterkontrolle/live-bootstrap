@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage signed boot generations and thick-LVM rollback snapshots.
+"""Manage explicit unsigned/signed boot generations and classic-LVM rollback snapshots.
 
 This deliberately does not run emerge or build a kernel. begin() protects the
 current root before package work; seal() publishes the reviewed new artifacts.
@@ -10,6 +10,8 @@ import argparse
 import atexit
 import fcntl
 import hashlib
+import json
+import signal
 import os
 from pathlib import Path
 import re
@@ -23,6 +25,7 @@ import tomllib
 from datetime import datetime, timezone
 
 CONFIG = Path(os.environ.get("MS1504_GENERATION_CONFIG", "/etc/ms1504-signed-generation.toml"))
+LOCK = Path("/run/ms1504-generations/lock")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _SIGNER: tuple[list[str], dict[str, str]] | None = None
 
@@ -35,7 +38,8 @@ def need(condition: bool, message: str) -> None:
 def run(args: list[str], *, input: bytes | None = None) -> bytes:
     try:
         return subprocess.run(args, input=input, check=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE).stdout
+                              stderr=subprocess.PIPE, env={**os.environ, "LC_ALL": "C"},
+                              **({"stdin": subprocess.DEVNULL} if input is None else {})).stdout
     except FileNotFoundError as exc:
         raise RuntimeError(f"required command is unavailable: {args[0]}") from exc
     except subprocess.CalledProcessError as exc:
@@ -44,6 +48,7 @@ def run(args: list[str], *, input: bytes | None = None) -> bytes:
 
 
 def atomic_write(path: Path, data: bytes, mode: int = 0o644) -> None:
+    need(not path.is_symlink(), f"refusing a symlink destination: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -71,6 +76,15 @@ def fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
+def protected_path(path: Path) -> None:
+    need(path.is_absolute() and ".." not in path.parts, f"unsafe absolute path: {path}")
+    for part in [*reversed(path.parents), path]:
+        need(not part.is_symlink(), f"symlink in protected path: {part}")
+        if part.exists():
+            stat = part.stat()
+            need(stat.st_uid == 0 and not stat.st_mode & 0o022, f"unprotected path: {part}")
+
+
 def read_config() -> dict:
     try:
         config = tomllib.loads(CONFIG.read_text())
@@ -81,6 +95,10 @@ def read_config() -> dict:
               "snapshots": {"size_gib", "maximum_data_percent", "retain_generations"},
               "state": {"directory"}}
     need(set(config) == set(schema), "configuration has unknown or missing sections")
+    policy = config.get("boot", {}).get("policy", "signed")
+    need(policy in ("signed", "unsigned"), "[boot].policy must be signed or unsigned")
+    if "policy" in config.get("boot", {}):
+        schema["boot"] = {"directory", "policy"} | ({"public_key", "signing_fingerprint"} if policy == "signed" else set())
     for section, keys in schema.items():
         need(isinstance(config[section], dict) and set(config[section]) == keys,
              f"[{section}] has unknown or missing keys")
@@ -90,17 +108,17 @@ def read_config() -> dict:
     for key in ("volume_group", "root_lv", "home_lv", "swap_lv"):
         need(re.fullmatch(r"[A-Za-z0-9+_.-]+", config["system"].get(key, "")) is not None,
              f"invalid [system].{key}")
-    need(type(config["boot"].get("signing_fingerprint")) is str and bool(config["boot"]["signing_fingerprint"]),
-         "set [boot].signing_fingerprint after creating the signing key")
-    fingerprint = str(config["boot"]["signing_fingerprint"]).replace(" ", "")
-    need(re.fullmatch(r"[A-Fa-f0-9]{40}|[A-Fa-f0-9]{64}", fingerprint) is not None,
-         "[boot].signing_fingerprint must be a full OpenPGP fingerprint")
-    config["boot"]["signing_fingerprint"] = fingerprint.upper()
+    config["policy"] = policy
+    if policy == "signed":
+        fingerprint = config["boot"]["signing_fingerprint"].replace(" ", "")
+        need(re.fullmatch(r"[A-Fa-f0-9]{40}|[A-Fa-f0-9]{64}", fingerprint) is not None,
+             "[boot].signing_fingerprint must be a full OpenPGP fingerprint")
+        config["boot"]["signing_fingerprint"] = fingerprint.upper()
     config["vg"] = config["system"]["volume_group"]
     config["root"] = f"/dev/{config['vg']}/{config['system']['root_lv']}"
     config["state_dir"] = Path(config["state"]["directory"])
     config["boot_dir"] = Path(config["boot"]["directory"])
-    config["public_key"] = Path(config["boot"]["public_key"])
+    config["public_key"] = Path(config["boot"].get("public_key", "/etc/ms1504-boot/boot.key"))
     for key, minimum, maximum in (("size_gib", 1, 96), ("maximum_data_percent", 1, 99),
                                  ("retain_generations", 1, 2)):
         value = config["snapshots"].get(key)
@@ -111,7 +129,9 @@ def read_config() -> dict:
     need(config["state_dir"] not in (Path("/"), Path("/boot")) and
          config["boot_dir"] not in (Path("/"), config["state_dir"]),
          "state and boot directories cannot overlap a filesystem root")
+    need(config["boot_dir"] == Path("/boot"), "boot directory must be /boot on encrypted root")
     if CONFIG.exists():
+        need(not CONFIG.is_symlink(), "generation config must not be a symlink")
         mode = CONFIG.stat().st_mode & 0o777
         need(CONFIG.stat().st_uid == 0 and not (mode & 0o022),
              "generation config must be root-owned and not group/other-writable")
@@ -132,7 +152,7 @@ def read_root_identity(cfg: dict) -> dict[str, str]:
 
 
 def validate_root_identity(result: dict[str, str], cfg: dict) -> dict[str, str]:
-    need(result.get("profile") == "hardware", "signed generations are hardware-only")
+    need(result.get("profile") == "hardware", "generation transactions are hardware-only")
     need(result.get("volume_group") == cfg["vg"] and
          result.get("root_lv") == cfg["system"]["root_lv"] and
          result.get("home_lv") == cfg["system"]["home_lv"] and
@@ -187,7 +207,15 @@ def signer_args(args: argparse.Namespace, fingerprint: str) -> tuple[list[str], 
     return _SIGNER
 
 
+def signed(cfg: dict) -> bool:
+    return cfg.get("policy", "signed") == "signed"
+
+
 def sign(path: Path, args: argparse.Namespace, cfg: dict) -> None:
+    if not signed(cfg):
+        atomic_write(Path(str(path) + ".sha256"),
+                     f"sha256={hashlib.sha256(path.read_bytes()).hexdigest()}\n".encode())
+        return
     base, env = signer_args(args, cfg["boot"]["signing_fingerprint"])
     signature = Path(str(path) + ".sig")
     proc = subprocess.run(base + [str(signature), str(path)], stdout=subprocess.PIPE,
@@ -199,6 +227,10 @@ def sign(path: Path, args: argparse.Namespace, cfg: dict) -> None:
 
 
 def verify_signature(path: Path, args: argparse.Namespace, cfg: dict) -> None:
+    if not signed(cfg):
+        expected = parse_fields(Path(str(path) + ".sha256")).get("sha256")
+        need(expected == hashlib.sha256(path.read_bytes()).hexdigest(), f"unsigned artifact checksum differs: {path}")
+        return
     base, env = signer_args(args, cfg["boot"]["signing_fingerprint"])
     verify = [item for item in base if item not in ("--detach-sign", "--output", "--local-user",
                                                      cfg["boot"]["signing_fingerprint"])]
@@ -219,7 +251,7 @@ def save_signed_artifacts(dest: Path, pairs: list[tuple[Path, str]], args: argpa
                  f"incomplete generation directory needs inspection: {dest}")
             need(hashlib.sha256(source.read_bytes()).digest() == hashlib.sha256(target.read_bytes()).digest(),
                  f"existing artifact differs from the selected input: {target}")
-            if Path(str(target) + ".sig").is_file():
+            if Path(str(target) + (".sig" if signed(cfg) else ".sha256")).is_file():
                 verify_signature(target, args, cfg)
             else:
                 sign(target, args, cfg)
@@ -236,7 +268,7 @@ def save_signed_artifacts(dest: Path, pairs: list[tuple[Path, str]], args: argpa
                 os.fsync(stream.fileno())
             sign(target, args, cfg)
             verify_signature(target, args, cfg)
-            os.chmod(Path(str(target) + ".sig"), 0o644)
+            os.chmod(Path(str(target) + (".sig" if signed(cfg) else ".sha256")), 0o644)
         os.chmod(temporary, 0o755)
         fsync_dir(temporary)
         os.rename(temporary, dest)
@@ -247,6 +279,8 @@ def save_signed_artifacts(dest: Path, pairs: list[tuple[Path, str]], args: argpa
 
 
 def verify_public_key(cfg: dict) -> None:
+    if not signed(cfg):
+        return
     need(cfg["public_key"].is_file(), f"GRUB public key is missing: {cfg['public_key']}")
     need(not cfg["public_key"].read_bytes().startswith(b"-----BEGIN PGP"),
          "GRUB public key must be binary OpenPGP format, not ASCII armor")
@@ -268,7 +302,8 @@ def record_generation(cfg: dict, generation: str, menu_id: str, snapshot: str = 
                  cfg["boot_dir"] / "generations" / generation / "initramfs.img",
                  cfg["boot_dir"] / "grub" / "menus" / menu_id / "grub.cfg"]
     rows = [f"generation={generation}", f"menu={menu_id}", f"rollback_snapshot={snapshot}",
-            f"fingerprint={cfg['boot']['signing_fingerprint']}",
+            f"policy={cfg.get('policy', 'signed')}",
+            f"fingerprint={cfg['boot'].get('signing_fingerprint', 'none')}",
             f"created={datetime.now(timezone.utc).isoformat()}"]
     rows += [f"sha256:{path.name}={hashlib.sha256(path.read_bytes()).hexdigest()}" for path in artifacts]
     receipt = cfg["state_dir"] / f"generation-{generation}.receipt"
@@ -281,6 +316,9 @@ def root_is_live(cfg: dict) -> None:
     source = run(["findmnt", "-rn", "-M", "/", "-o", "SOURCE"]).decode().strip()
     need(os.path.realpath(source) == os.path.realpath(cfg["root"]),
          f"running root is {source}, expected {cfg['root']}")
+    need(cfg["boot_dir"].stat().st_dev == Path("/").stat().st_dev and
+         cfg["state_dir"].stat().st_dev == Path("/").stat().st_dev,
+         "boot and generation state must reside on the encrypted root filesystem")
 
 
 def make_menu(cfg: dict, current: str, snapshots: list[dict[str, str]] | str | None,
@@ -300,7 +338,8 @@ def make_menu(cfg: dict, current: str, snapshots: list[dict[str, str]] | str | N
     need(0 <= default < len(choices), "default menu index is outside the available entries")
     for name, lv, ident in choices:
         root = f"/dev/{cfg['vg']}/{lv}"
-        lvm_root = f"(lvm/{cfg['vg']}-{lv})"
+        escape = lambda value: value.replace("-", "--")
+        lvm_root = f"(lvm/{escape(cfg['vg'])}-{escape(cfg['system']['root_lv'])})"
         kernel = f"/boot/generations/{ident}/vmlinuz"
         initrd = f"/boot/generations/{ident}/initramfs.img"
         cmdline = list(base_cmdline) if base_cmdline is not None else Path("/etc/kernel/cmdline").read_text().split()
@@ -311,6 +350,15 @@ def make_menu(cfg: dict, current: str, snapshots: list[dict[str, str]] | str | N
                     f"rd.lvm.lv={cfg['vg']}/{cfg['system']['home_lv']}",
                     f"rd.lvm.lv={cfg['vg']}/{cfg['system']['swap_lv']}",
                     f"ms1504.generation={ident}"]
+        if not signed(cfg):
+            entries.append(f"""menuentry '{name} (unsigned)' {{
+    insmod lvm
+    insmod ext2
+    set root={lvm_root}
+    linux {kernel} {' '.join(cmdline)}
+    initrd {initrd}
+}}""")
+            continue
         entries.append(f"""menuentry '{name}' --unrestricted {{
     set root={lvm_root}
     if verify_detached {kernel} {kernel}.sig; then
@@ -323,7 +371,9 @@ def make_menu(cfg: dict, current: str, snapshots: list[dict[str, str]] | str | N
     return (f"set default={default}\nset timeout=10\n" + "\n".join(entries) + "\n").encode()
 
 
-def wrapper_config() -> bytes:
+def wrapper_config(cfg: dict | None = None) -> bytes:
+    if cfg is not None and not signed(cfg):
+        return b"# Managed unsigned generations; no signature enforcement.\nconfigfile /boot/grub/active/grub.cfg\n"
     return b"""if verify_detached /boot/grub/active/grub.cfg /boot/grub/active/grub.cfg.sig; then
     configfile /boot/grub/active/grub.cfg
 fi
@@ -335,9 +385,10 @@ def publish(cfg: dict, menu: bytes, args: argparse.Namespace, *, initialize: boo
     root = cfg["boot_dir"] / "grub"
     need(not root.is_symlink(), "GRUB state directory must not be a symlink")
     wrapper_path = root / "grub.cfg"
+    suffix = ".sig" if signed(cfg) else ".sha256"
     if not initialize:
-        need(wrapper_path.is_file() and Path(str(wrapper_path) + ".sig").is_file(),
-             "fixed GRUB entry is not the signed generation wrapper; run initialize")
+        need(wrapper_path.is_file() and Path(str(wrapper_path) + suffix).is_file(),
+             "fixed GRUB entry is not the managed generation wrapper; run initialize")
         verify_signature(wrapper_path, args, cfg)
     generations = root / "menus"
     generations.mkdir(parents=True, exist_ok=True)
@@ -348,11 +399,11 @@ def publish(cfg: dict, menu: bytes, args: argparse.Namespace, *, initialize: boo
     menu_path = target / "grub.cfg"
     atomic_write(menu_path, menu)
     checker = shutil.which("grub-script-check")
-    need(checker is not None, "grub-script-check is required before publishing a signed menu")
+    need(checker is not None, "grub-script-check is required before publishing a generation menu")
     run([checker, str(menu_path)])
     sign(menu_path, args, cfg)
     verify_signature(menu_path, args, cfg)
-    os.chmod(Path(str(menu_path) + ".sig"), 0o644)
+    os.chmod(Path(str(menu_path) + suffix), 0o644)
     fsync_dir(target)
     # A directory symlink switch publishes the menu and its signature together.
     link_tmp = root / ".active.new"
@@ -366,15 +417,33 @@ def publish(cfg: dict, menu: bytes, args: argparse.Namespace, *, initialize: boo
     fsync_dir(root)
     if initialize:
         staged = root / ".grub.cfg.initializing"
-        atomic_write(staged, wrapper_config())
+        atomic_write(staged, wrapper_config(cfg))
         sign(staged, args, cfg)
         verify_signature(staged, args, cfg)
-        os.replace(str(staged) + ".sig", str(wrapper_path) + ".sig")
+        os.replace(str(staged) + suffix, str(wrapper_path) + suffix)
         os.replace(staged, wrapper_path)
         os.chmod(wrapper_path, 0o644)
-        os.chmod(Path(str(wrapper_path) + ".sig"), 0o644)
+        os.chmod(Path(str(wrapper_path) + suffix), 0o644)
         fsync_dir(root)
     return ident
+
+
+def policy_binding(cfg: dict) -> bytes:
+    return (json.dumps({"policy": cfg.get("policy", "signed"), "system": cfg["system"],
+                        "boot": cfg["boot"], "state": str(cfg["state_dir"])}, sort_keys=True) + "\n").encode()
+
+
+def check_policy(cfg: dict, *, initialize: bool = False, target: Path = Path("/")) -> None:
+    owner = cfg["boot_dir"] / "grub" / "generation-policy.json"
+    if owner.exists():
+        need(not owner.is_symlink() and owner.read_bytes() == policy_binding(cfg),
+             "boot policy/layout differs from initialized generation ownership; explicit migration required")
+    else:
+        need(initialize or signed(cfg), "unsigned generations are not initialized")
+    if not signed(cfg):
+        need(not (cfg["boot_dir"] / "grub/grub.cfg.sig").exists() and
+             not (target / "etc/ms1504-signed-generation.toml").exists(),
+             "refusing unsigned operation while signed configuration/artifacts exist")
 
 
 def command_initialize(cfg: dict, args: argparse.Namespace) -> None:
@@ -384,8 +453,16 @@ def command_initialize(cfg: dict, args: argparse.Namespace) -> None:
     need(not (cfg["state_dir"] / "pending").exists(),
          "incomplete generation transaction exists; inspect before initialization")
     fixed_menu = cfg["boot_dir"] / "grub" / "grub.cfg"
+    check_policy(cfg, initialize=True)
+    need(not (cfg["state_dir"] / "initialized").exists(),
+         "generation boot is already initialized; refusing to replace its active menu")
+    # Preserve the previous usable menu before claiming ownership.
+    if fixed_menu.is_file():
+        backup = cfg["state_dir"] / "pre-generation-grub.cfg"
+        if not backup.exists():
+            atomic_write(backup, fixed_menu.read_bytes(), 0o600)
     fixed_signature = Path(str(fixed_menu) + ".sig")
-    if fixed_menu.is_file() and fixed_signature.is_file():
+    if fixed_menu.is_file() and fixed_signature.is_file() and not (cfg["boot_dir"] / "grub/generation-policy.json").exists():
         try:
             verify_signature(fixed_menu, args, cfg)
         except RuntimeError:
@@ -402,11 +479,14 @@ def command_initialize(cfg: dict, args: argparse.Namespace) -> None:
     src_kernel = Path(f"/boot/vmlinuz-{os.uname().release}")
     src_initrd = Path(f"/boot/initramfs-{os.uname().release}.img")
     need(src_kernel.is_file() and src_initrd.is_file(), "current kernel/initramfs pair is missing")
+    need(not actual_root_snapshots(cfg), "root snapshots already exist; inspect them before initialization")
     dest = cfg["boot_dir"] / "generations" / generation
     save_signed_artifacts(dest, [(src_kernel, "vmlinuz"), (src_initrd, "initramfs.img")], args, cfg)
+    atomic_write(cfg["boot_dir"] / "grub/generation-policy.json", policy_binding(cfg))
     menu_id = publish(cfg, make_menu(cfg, generation, None), args, initialize=True)
     record_generation(cfg, generation, menu_id)
-    print(f"Initialized signed generation {generation}; menu receipt {menu_id}")
+    atomic_write(cfg["state_dir"] / "initialized", (generation + "\n").encode(), 0o600)
+    print(f"Initialized {cfg.get('policy', 'signed')} generation {generation}; menu receipt {menu_id}")
 
 
 def parse_fields(path: Path) -> dict[str, str]:
@@ -445,6 +525,8 @@ def snapshot_health(cfg: dict, snapshot: str) -> tuple[float, int]:
     need(origin == cfg["system"]["root_lv"], f"snapshot origin differs: {snapshot}")
     need(attr.startswith("s"), f"LV is not a classic snapshot: {snapshot}")
     need(percent_text not in ("", "-"), f"snapshot COW usage is unavailable: {snapshot}")
+    need(re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", percent_text) is not None,
+         f"snapshot COW usage is not a C-locale number: {percent_text!r}")
     percent = float(percent_text)
     need(0 <= percent <= 100, f"snapshot COW usage is invalid: {snapshot}")
     need(percent < 100 and "I" not in attr, f"snapshot is full or invalid: {snapshot}")
@@ -475,12 +557,9 @@ def snapshot_rows(cfg: dict, *, enforce_threshold: bool = True) -> list[dict[str
 
 
 def create_snapshot(cfg: dict, snapshot: str, size_gib: int) -> None:
-    run(["fsfreeze", "-f", "/"])
-    try:
-        run(["lvcreate", "--snapshot", "--size", f"{size_gib}G", "--name", snapshot, cfg["root"]])
-    finally:
-        # Keep the thaw paired with every successful or failed freeze attempt.
-        run(["fsfreeze", "-u", "/"])
+    # device-mapper synchronizes/freezes the filesystem during snapshot creation.
+    # An outer root fsfreeze can deadlock LVM archive/log writes on that root.
+    run(["lvcreate", "--snapshot", "--size", f"{size_gib}G", "--name", snapshot, cfg["root"]])
     snapshot_health(cfg, snapshot)
 
 
@@ -492,15 +571,17 @@ def publish_retained_menu(cfg: dict, current: str, rows: list[dict[str, str]], a
 
 def command_begin(cfg: dict, args: argparse.Namespace) -> None:
     root_is_live(cfg)
+    check_policy(cfg)
     identity = read_root_identity(cfg)
     verify_public_key(cfg)
     need(not Path("/home/.ms1504-hibernate/hibernation-pending").exists(),
          "pending hibernation state must be resolved before starting a root update")
     active = cfg["boot_dir"] / "grub" / "active" / "grub.cfg"
-    need(active.is_file(), "no active signed menu; run initialize first")
+    need(active.is_file(), "no active generation menu; run initialize first")
     verify_signature(active, args, cfg)
     marker = Path("/etc/ms1504-generation").read_text().splitlines()[0].strip()
     need(NAME.fullmatch(marker), "installed generation marker is invalid")
+    verify_artifact_receipt(cfg, marker)
     pending = cfg["state_dir"] / "pending"
     size = cfg["snapshots"]["size_gib"]
     if pending.exists():
@@ -538,9 +619,20 @@ def command_begin(cfg: dict, args: argparse.Namespace) -> None:
         create_snapshot(cfg, snapshot, int(fields["size_gib"]))
     else:
         snapshot_health(cfg, snapshot)
+    percent, allocation = snapshot_health(cfg, snapshot)
+    need(percent < cfg["snapshots"]["maximum_data_percent"] and allocation >= size * 1024**3,
+         "pending snapshot allocation/health is unsafe")
+    uuid = run(["lvs", "--noheadings", "-o", "lv_uuid", f"/dev/{cfg['vg']}/{snapshot}"]).decode().strip()
+    need(bool(uuid) and not any(x.isspace() for x in uuid), "snapshot UUID is unavailable")
+    need(not fields.get("snapshot_uuid") or fields["snapshot_uuid"] == uuid, "pending snapshot UUID changed")
+    fields["snapshot_uuid"] = uuid
+    atomic_write(pending / "transaction", ("\n".join(f"{k}={v}" for k, v in fields.items()) + "\n").encode(), 0o600)
     rows = retained_transactions(cfg)
     need(actual_root_snapshots(cfg) == {row["snapshot"] for row in rows} | {snapshot},
          "unreceipted or missing root snapshot detected; inspect LVM and receipts")
+    for row in rows:
+        percent, _ = snapshot_health(cfg, row["snapshot"])
+        need(percent < cfg["snapshots"]["maximum_data_percent"], "retained snapshot reached COW threshold")
     rows.insert(0, {**fields, "directory": str(pending)})
     menu_id = publish_retained_menu(cfg, marker, rows, args, default=1)
     atomic_write(pending / "menu", (menu_id + "\n").encode(), 0o600)
@@ -549,6 +641,7 @@ def command_begin(cfg: dict, args: argparse.Namespace) -> None:
 
 def command_seal(cfg: dict, args: argparse.Namespace) -> None:
     root_is_live(cfg)
+    check_policy(cfg)
     read_root_identity(cfg)
     verify_public_key(cfg)
     need(not Path("/home/.ms1504-hibernate/hibernation-pending").exists(),
@@ -568,12 +661,18 @@ def command_seal(cfg: dict, args: argparse.Namespace) -> None:
     need(not destination.exists(), "completed transaction destination already exists; inspect receipts")
     if fields.get("new"):
         need(fields["new"] == generation, "interrupted seal must resume with the same generation name")
+    for key, value in (("kernel_sha256", hashlib.sha256(Path(args.kernel).read_bytes()).hexdigest()),
+                       ("initramfs_sha256", hashlib.sha256(Path(args.initramfs).read_bytes()).hexdigest())):
+        need(not fields.get(key) or fields[key] == value, "interrupted seal inputs changed")
+        fields[key] = value
     fields["new"] = generation
     atomic_write(pending, ("\n".join(f"{key}={value}" for key, value in fields.items() if key != "directory") + "\n").encode(), 0o600)
     live_generation = Path("/etc/ms1504-generation").read_text().strip()
     need(live_generation in (fields["old"], generation),
          "running generation differs from both the pending base and requested output")
     need(Path(f"/dev/{cfg['vg']}/{fields['snapshot']}").exists(), "rollback snapshot LV is missing")
+    need(fields.get("snapshot_uuid") == run(["lvs", "--noheadings", "-o", "lv_uuid",
+         f"/dev/{cfg['vg']}/{fields['snapshot']}"]).decode().strip(), "snapshot UUID changed")
     percent, _ = snapshot_health(cfg, fields["snapshot"])
     need(percent < cfg["snapshots"]["maximum_data_percent"],
          "rollback snapshot COW use reached the configured safety threshold")
@@ -611,7 +710,7 @@ def command_seal(cfg: dict, args: argparse.Namespace) -> None:
                  f"generation={generation}\nprevious={fields['old']}\nmenu={menu_id}\n".encode(), 0o600)
     pending_dir.rename(destination)
     fsync_dir(cfg["state_dir"])
-    print(f"Published signed generation {generation}; prior root retained as {fields['snapshot']}.")
+    print(f"Published {cfg.get('policy', 'signed')} generation {generation}; prior root retained as {fields['snapshot']}.")
 
 
 def current_root_source() -> str:
@@ -620,6 +719,7 @@ def current_root_source() -> str:
 
 def command_rollback(cfg: dict, args: argparse.Namespace) -> None:
     root_is_live(cfg)
+    check_policy(cfg)
     verify_public_key(cfg)
     need(not (cfg["state_dir"] / "pending").exists(),
          "an update transaction is still pending; complete or recover it before rollback selection")
@@ -638,8 +738,108 @@ def command_rollback(cfg: dict, args: argparse.Namespace) -> None:
     print(f"Rollback generation {row['old']} is now the default ({row['snapshot']}); menu {menu_id}.")
 
 
+def check_pending(cfg: dict) -> None:
+    root_is_live(cfg)
+    check_policy(cfg)
+    need(not (cfg["state_dir"] / "pruning").exists(), "unfinished pruning requires recovery")
+    fields = parse_fields(cfg["state_dir"] / "pending/transaction")
+    marker = Path("/etc/ms1504-generation").read_text().strip()
+    need(NAME.fullmatch(marker) is not None and fields.get("old") == marker and not fields.get("new"),
+         "pending transaction does not protect the current generation or seal has started")
+    snapshot = f"{cfg['system']['root_lv']}_rollback_{marker}"
+    need(fields.get("snapshot") == snapshot and fields.get("size_gib") == str(cfg["snapshots"]["size_gib"]),
+         "pending snapshot identity/allocation differs")
+    need(fields.get("snapshot_uuid") == run(["lvs", "--noheadings", "-o", "lv_uuid",
+         f"/dev/{cfg['vg']}/{snapshot}"]).decode().strip(), "pending snapshot UUID differs")
+    rows = retained_transactions(cfg)
+    need(actual_root_snapshots(cfg) == {row["snapshot"] for row in rows} | {snapshot},
+         "unreceipted or missing root snapshot detected")
+    for name in [snapshot] + [row["snapshot"] for row in rows]:
+        percent, size = snapshot_health(cfg, name)
+        need(percent < cfg["snapshots"]["maximum_data_percent"], f"snapshot {name} reached COW safety threshold")
+        need(size >= cfg["snapshots"]["size_gib"] * 1024**3, f"snapshot {name} allocation is too small")
+    menu_id = (cfg["state_dir"] / "pending/menu").read_text().strip()
+    need(NAME.fullmatch(menu_id) is not None, "pending menu identity is malformed")
+    active = cfg["boot_dir"] / "grub/active"
+    need(active.is_symlink() and os.readlink(active) == str(Path("menus") / menu_id),
+         "pending recovery menu is not active")
+    menu = active / "grub.cfg"
+    need(menu.read_bytes() == make_menu(cfg, marker, [{"old": marker, "snapshot": snapshot}] +
+         [{"old": row["old"], "snapshot": row["snapshot"]} for row in rows], default=1),
+         "pending recovery menu differs from the protected transaction")
+    if not signed(cfg):
+        verify_signature(menu, argparse.Namespace(), cfg)
+        verify_signature(cfg["boot_dir"] / "grub/grub.cfg", argparse.Namespace(), cfg)
+    verify_artifact_receipt(cfg, marker)
+
+
+def verify_artifact_receipt(cfg: dict, generation: str) -> None:
+    receipt = parse_fields(cfg["state_dir"] / f"generation-{generation}.receipt")
+    need(receipt.get("generation") == generation, "generation receipt identity differs")
+    for name in ("vmlinuz", "initramfs.img"):
+        path = cfg["boot_dir"] / "generations" / generation / name
+        need(path.is_file() and not path.is_symlink() and
+             receipt.get("sha256:" + name) == hashlib.sha256(path.read_bytes()).hexdigest(),
+             f"protected boot artifact differs: {path}")
+
+
+def command_verify_running(cfg: dict) -> None:
+    read_root_identity(cfg)
+    check_policy(cfg)
+    marker = Path("/etc/ms1504-generation").read_text().strip()
+    need(NAME.fullmatch(marker) is not None, "invalid running generation marker")
+    cmdline = Path("/proc/cmdline").read_text().split()
+    need([item for item in cmdline if item.startswith("ms1504.generation=")] == [f"ms1504.generation={marker}"],
+         "running kernel generation differs from its root")
+    actual = current_root_source()
+    snapshot = f"/dev/{cfg['vg']}/{cfg['system']['root_lv']}_rollback_{marker}"
+    need(actual in {os.path.realpath(cfg["root"]), os.path.realpath(snapshot)}, "running root is outside the generation layout")
+    selected_roots = [item[5:] for item in cmdline if item.startswith("root=")]
+    need(len(selected_roots) == 1, "missing or duplicate root boot argument")
+    selected = selected_roots[0]
+    need(os.path.realpath(selected) == actual, "running root differs from selected root")
+    verify_artifact_receipt(cfg, marker)
+    print(f"Running generation {marker} verified on {actual}; boot_policy={cfg.get('policy', 'signed')}")
+
+
+def command_run(cfg: dict, args: argparse.Namespace) -> None:
+    command = args.command
+    if command and command[0] == "--":
+        command = command[1:]
+    need(bool(command), "run requires a command after --")
+    check_pending(cfg)
+    child = subprocess.Popen(command, start_new_session=True)
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+    previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        while True:
+            try:
+                result = child.wait(timeout=5)
+                break
+            except subprocess.TimeoutExpired:
+                check_pending(cfg)
+        need(result == 0, f"protected command exited with status {result}")
+        check_pending(cfg)
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGINT)
+            try:
+                child.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                os.killpg(child.pid, signal.SIGTERM)
+                try:
+                    child.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait()
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def command_status(cfg: dict) -> None:
     root = Path("/etc/ms1504-generation")
+    print(f"boot_policy={cfg.get('policy', 'signed')} (firmware enforcement is a separate hardware acceptance)")
     print(f"root={cfg['root']}")
     print(f"generation={root.read_text().strip() if root.is_file() else 'uninitialized'}")
     pending = cfg["state_dir"] / "pending"
@@ -649,22 +849,32 @@ def command_status(cfg: dict) -> None:
     if (cfg["state_dir"] / "pruning").exists():
         print("recovery_receipt=pruning requires inspection")
     rows = retained_transactions(cfg)
+    if pending.exists():
+        check_pending(cfg)
+        rows.insert(0, parse_fields(pending / "transaction"))
+    problems = ["unfinished pruning requires recovery"] if (cfg["state_dir"] / "pruning").exists() else []
     try:
         actual = actual_root_snapshots(cfg)
         expected = {row["snapshot"] for row in rows}
         if actual != expected:
+            problems.append("snapshot inventory differs")
             print(f"snapshot_inventory=REQUIRES_INSPECTION expected={sorted(expected)} actual={sorted(actual)}")
     except (RuntimeError, OSError) as exc:
+        problems.append(str(exc))
         print(f"snapshot_inventory=REQUIRES_INSPECTION {exc}")
     for row in rows:
         snapshot = row["snapshot"]
         try:
             percent, size = snapshot_health(cfg, snapshot)
             threshold = cfg["snapshots"]["maximum_data_percent"]
+            if percent >= threshold:
+                problems.append(f"snapshot {snapshot} reached safety threshold")
             status = f"{'WARNING' if percent >= threshold else 'healthy'} data_percent={percent:g} threshold={threshold} cow_bytes={size}"
         except (RuntimeError, OSError) as exc:
+            problems.append(str(exc))
             status = f"REQUIRES_INSPECTION {exc}"
         print(f"rollback={row.get('old', '?')} snapshot={snapshot} {status}")
+    need(not problems, "; ".join(problems))
 
 
 def confirm_tty(prompt: str, expected: str) -> None:
@@ -676,15 +886,28 @@ def confirm_tty(prompt: str, expected: str) -> None:
 
 def command_prune(cfg: dict, args: argparse.Namespace) -> None:
     root_is_live(cfg)
+    check_policy(cfg)
     verify_public_key(cfg)
     need(not (cfg["state_dir"] / "pending").exists(),
          "finish or recover the pending update before pruning")
     current = Path("/etc/ms1504-generation").read_text().strip()
     need(NAME.fullmatch(current) is not None, "current generation marker is invalid")
     rows = retained_transactions(cfg)
-    need(actual_root_snapshots(cfg) == {item["snapshot"] for item in rows},
-         "unreceipted or missing root snapshot detected; inspect LVM and receipts")
+    actual = actual_root_snapshots(cfg)
+    expected = {item["snapshot"] for item in rows}
+    pruning = cfg["state_dir"] / "pruning"
+    interrupted = parse_fields(pruning) if pruning.exists() else None
+    if interrupted:
+        need(interrupted.get("generation") == args.generation, "resume the recorded pruning operation first")
+        need(interrupted.get("snapshot") == f"{cfg['system']['root_lv']}_rollback_{args.generation}", "pruning snapshot identity differs")
+        need(actual in (expected, expected - {interrupted["snapshot"]}), "unexpected snapshot inventory during prune recovery")
+    else:
+        need(actual == expected, "unreceipted or missing root snapshot detected; inspect LVM and receipts")
     row = next((item for item in rows if item.get("old") == args.generation), None)
+    if row is None and interrupted:
+        need(interrupted["snapshot"] not in actual, "prune receipt lost while its LV still exists")
+        row = {"old": args.generation, "snapshot": interrupted["snapshot"],
+               "directory": str(cfg["state_dir"] / f"completed-{args.generation}")}
     need(row is not None, f"no retained generation matches {args.generation}")
     need(row["old"] != current, "cannot prune the currently installed generation")
     snapshot = row["snapshot"]
@@ -696,7 +919,7 @@ def command_prune(cfg: dict, args: argparse.Namespace) -> None:
         need(os.path.realpath(str(snapshot_path)) not in
              {os.path.realpath(source) for source in mounts}, "selected snapshot is mounted")
     confirmation = f"PRUNE {row['old']} {snapshot}"
-    confirm_tty("This permanently removes this rollback snapshot and its signed boot artifacts.", confirmation)
+    confirm_tty("This permanently removes this rollback snapshot and its retained boot artifacts.", confirmation)
     pruning = cfg["state_dir"] / "pruning"
     atomic_write(pruning, f"generation={row['old']}\nsnapshot={snapshot}\nstarted={datetime.now(timezone.utc).isoformat()}\n".encode(), 0o600)
     remaining = [item for item in rows if item is not row]
@@ -708,7 +931,8 @@ def command_prune(cfg: dict, args: argparse.Namespace) -> None:
     completed = Path(row["directory"])
     need(completed.parent == cfg["state_dir"] and completed.name == f"completed-{row['old']}",
          "rollback receipt directory is outside the managed state tree")
-    shutil.rmtree(completed)
+    if completed.exists():
+        shutil.rmtree(completed)
     artifact_dir = cfg["boot_dir"] / "generations" / row["old"]
     if artifact_dir.exists():
         need(artifact_dir.parent == cfg["boot_dir"] / "generations" and not artifact_dir.is_symlink(),
@@ -720,7 +944,7 @@ def command_prune(cfg: dict, args: argparse.Namespace) -> None:
         receipt.unlink()
     pruning.unlink(missing_ok=True)
     fsync_dir(cfg["state_dir"])
-    print(f"Pruned rollback generation {row['old']}; active signed menu is {menu_id}.")
+    print(f"Pruned rollback generation {row['old']}; active generation menu is {menu_id}.")
 
 
 def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
@@ -733,16 +957,33 @@ def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
     state = target / cfg["state_dir"].relative_to("/")
     current_marker = (target / "etc/ms1504-generation").read_text().strip()
     need(NAME.fullmatch(current_marker) is not None, "target generation marker is malformed")
+    check_policy({**cfg, "boot_dir": target / "boot"}, target=target)
     completed = state / f"completed-{args.generation}"
+    if not completed.exists():
+        completed = state / "pending"
     fields = parse_fields(completed / "transaction")
+    need(fields.get("snapshot") == f"{cfg['system']['root_lv']}_rollback_{args.generation}",
+         "rollback snapshot name differs from the requested generation")
     need(fields.get("old") == args.generation and NAME.fullmatch(fields.get("old", "")) is not None,
          "selected rollback receipt does not match the requested generation")
+    recorded = retained_transactions({**cfg, "state_dir": state})
+    pending_dir = state / "pending"
+    newest = parse_fields(pending_dir / "transaction")["old"] if pending_dir.exists() else (recorded[0]["old"] if recorded else None)
+    need(newest == args.generation, "offline merge currently supports the newest recovery generation only")
+    expected_snapshots = {row["snapshot"] for row in recorded}
+    if pending_dir.exists():
+        expected_snapshots.add(parse_fields(pending_dir / "transaction")["snapshot"])
+    need(actual_root_snapshots(cfg) == expected_snapshots, "unreceipted or missing snapshot before offline merge")
     snapshot = f"/dev/{cfg['vg']}/{fields['snapshot']}"
     origin = cfg["root"]
     need(Path(snapshot).exists(), "rollback snapshot LV is missing")
+    snapshot_health(cfg, fields["snapshot"])
+    if fields.get("snapshot_uuid"):
+        need(fields["snapshot_uuid"] == run(["lvs", "--noheadings", "-o", "lv_uuid", snapshot]).decode().strip(),
+             "rollback snapshot UUID changed")
     origin_name = run(["lvs", "--noheadings", "-o", "origin", snapshot]).decode().strip()
     need(origin_name == cfg["system"]["root_lv"], f"snapshot origin mismatch: {origin_name}")
-    need(current_root_source() != os.path.realpath(origin),
+    need(current_root_source() not in {os.path.realpath(origin), os.path.realpath(snapshot)},
          "boot a recovery environment; the origin root cannot be merged while running")
     mounted_root = os.path.realpath(run(["findmnt", "-rn", "-M", str(target), "-o", "SOURCE"]).decode().strip())
     need(mounted_root in {os.path.realpath(origin), os.path.realpath(snapshot)},
@@ -751,15 +992,17 @@ def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
          "resolve pending hibernation state before merging a root generation")
     run(["umount", "-R", str(target)])
     mounts = run(["findmnt", "-rn", "-o", "SOURCE,TARGET"]).decode().splitlines()
-    devices = (origin, snapshot, f"/dev/{cfg['vg']}/{cfg['system']['home_lv']}",
+    snapshot_devices = [f"/dev/{cfg['vg']}/{name}" for name in sorted(expected_snapshots)]
+    devices = (origin, *snapshot_devices, f"/dev/{cfg['vg']}/{cfg['system']['home_lv']}",
                f"/dev/{cfg['vg']}/{cfg['system']['swap_lv']}")
     for device in devices:
         mounted = [line.split(None, 1)[1] for line in mounts if len(line.split(None, 1)) == 2
                    and os.path.realpath(line.split(None, 1)[0]) == os.path.realpath(device)]
         need(not mounted, f"refusing merge while {device} is mounted at {', '.join(mounted)}")
-    active = run(["lvs", "--noheadings", "-o", "lv_active", origin, snapshot]).decode().split()
-    need(active and all(value.lower() in ("inactive", "-", "unknown") for value in active),
-         "origin or snapshot LV is active; deactivate it in recovery and inspect before merging")
+    swaps = {os.path.realpath(row.split()[0]) for row in Path("/proc/swaps").read_text().splitlines()[1:]}
+    need(not swaps.intersection(os.path.realpath(device) for device in devices), "target swap is active; swapoff it in recovery first")
+    swap_type = run(["blkid", "-p", "-s", "TYPE", "-o", "value", devices[-1]]).decode().strip()
+    need(swap_type == "swap", "resolve hibernation/unknown swap state before offline merging")
     receipt_dir = Path(args.recovery_receipts)
     need(receipt_dir.is_absolute() and receipt_dir.is_dir() and os.path.ismount(receipt_dir),
          "recovery receipts must be stored on a separately mounted persistent filesystem")
@@ -770,6 +1013,9 @@ def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
           os.path.realpath(f"/dev/{cfg['vg']}/{cfg['system']['home_lv']}"),
           os.path.realpath(f"/dev/{cfg['vg']}/{cfg['system']['swap_lv']}")},
          "recovery receipts must survive a root merge on storage outside the target LVM volumes")
+    target_lvs = {os.path.realpath(value) for value in run(["lvs", "--noheadings", "-o", "lv_path", cfg["vg"]]).decode().split()}
+    receipt_ancestors = {os.path.realpath(value) for value in run(["lsblk", "-s", "-r", "-n", "-o", "PATH", receipt_source]).decode().split()}
+    need(not target_lvs.intersection(receipt_ancestors), "recovery receipts are backed by the target VG")
     merge_receipt = receipt_dir / f"merge-pending-{fields['old']}"
     completed_receipt = receipt_dir / f"merge-complete-{fields['old']}"
     need(not merge_receipt.exists() and not completed_receipt.exists(),
@@ -778,6 +1024,12 @@ def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
     confirm_tty("This permanently restores the selected root snapshot into the root LV.", confirmation)
     atomic_write(merge_receipt,
                  f"generation={fields['old']}\nsnapshot={fields['snapshot']}\nstarted={datetime.now(timezone.utc).isoformat()}\n".encode(), 0o600)
+    # Persist all transaction inputs outside the root before changing LVM.
+    atomic_write(receipt_dir / f"merge-transaction-{fields['old']}",
+                 ("\n".join(f"{k}={v}" for k, v in fields.items()) + "\n").encode(), 0o600)
+    # Deactivating the origin also deactivates its dependent classic snapshots.
+    # Naming a snapshot explicitly instead prompts to change its origin.
+    run(["lvchange", "--activate", "n", origin])
     run(["lvconvert", "--merge", snapshot])
     if Path(snapshot).exists():
         run(["lvchange", "--activate", "y", origin])
@@ -800,8 +1052,31 @@ def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
                  pending_fields.get("snapshot") == fields["snapshot"],
                  "restored pending transaction does not match the merged snapshot; inspect before cleanup")
             shutil.rmtree(restored_pending)
+        restored_cfg = {**cfg, "boot_dir": target / "boot", "state_dir": state}
+        if signed(cfg):
+            restored_cfg["public_key"] = target / cfg["public_key"].relative_to("/")
+        # The consumed snapshot must not remain in either restored receipts or menu.
+        stale = state / f"completed-{fields['old']}"
+        if stale.exists():
+            shutil.rmtree(stale)
+        rows = retained_transactions(restored_cfg)
+        actual = actual_root_snapshots(cfg)
+        # Older receipts can predate an explicitly pruned LV. Keep them as history,
+        # but do not restore them as live recovery entries after merging.
+        for row in rows:
+            if row["snapshot"] not in actual:
+                archive = state / "recovered-receipts"
+                archive.mkdir(exist_ok=True, mode=0o700)
+                Path(row["directory"]).rename(archive / Path(row["directory"]).name)
+        rows = retained_transactions(restored_cfg)
+        need(actual_root_snapshots(cfg) == {row["snapshot"] for row in rows},
+             "restored root has unreceipted snapshots; keep recovery mounted for inspection")
+        cmdline = (target / "etc/kernel/cmdline").read_text().split()
+        menu = make_menu(cfg, fields["old"], [{"old": row["old"], "snapshot": row["snapshot"]} for row in rows], base_cmdline=cmdline)
+        # Signed offline recovery requires credentials to publish the repaired menu.
+        menu_id = publish(restored_cfg, menu, args, initialize=True)
         atomic_write(state / "last-committed",
-                     f"generation={fields['old']}\nprevious=none\nmenu=restored-snapshot\n".encode(), 0o600)
+                     f"generation={fields['old']}\nprevious=none\nmenu={menu_id}\n".encode(), 0o600)
         atomic_write(state / f"merged-{fields['old']}",
                      f"generation={fields['old']}\nsnapshot={fields['snapshot']}\ncompleted={datetime.now(timezone.utc).isoformat()}\n".encode(), 0o600)
         atomic_write(completed_receipt,
@@ -816,15 +1091,19 @@ def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
     print("Rollback snapshot merged. Boot recovery media, activate and mount root, then verify its generation marker.")
 
 
-def main() -> int:
+def main(*, default_config: Path | None = None, require_signed: bool = True) -> int:
     global CONFIG
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=CONFIG)
+    parser.add_argument("--config", type=Path, default=default_config or CONFIG)
     keys = parser.add_mutually_exclusive_group(required=False)
     keys.add_argument("--secret-key-file", help="encrypted GPG secret-key export; imported into temporary /run GPG home")
     keys.add_argument("--gnupg-home", help="GPG home, including a hardware-token key stub")
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("status")
+    sub.add_parser("check-pending")
+    sub.add_parser("verify-running")
+    monitored = sub.add_parser("run")
+    monitored.add_argument("command", nargs=argparse.REMAINDER)
     sub.add_parser("initialize")
     sub.add_parser("begin")
     seal = sub.add_parser("seal")
@@ -845,27 +1124,40 @@ def main() -> int:
     lock_fd = None
     try:
         need(os.geteuid() == 0, "run this tool as root")
+        protected_path(args.config)
         cfg = read_config()
-        if args.action == "merge-rollback":
-            target = Path(args.recovery_root)
-            need(target.is_dir() and os.path.ismount(target),
-                 "merge recovery root must be a mounted target filesystem")
-            lock_dir = target / cfg["state_dir"].relative_to("/")
-        else:
-            lock_dir = cfg["state_dir"]
-        need(not lock_dir.is_symlink(), "generation state directory must not be a symlink")
-        lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        need(lock_dir.is_dir() and lock_dir.stat().st_uid == 0,
-             "generation state directory must be a root-owned directory")
-        os.chmod(lock_dir, 0o700)
-        lock_path = lock_dir / ".lock"
-        need(not lock_path.is_symlink(), "generation lock path must not be a symlink")
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if args.action != "merge-rollback":
+            protected_path(cfg["state_dir"])
+            protected_path(cfg["boot_dir"])
+        need(not require_signed or signed(cfg), "legacy signed-generation entry point requires signed policy")
+        if args.action != "merge-rollback":
+            check_policy(cfg, initialize=args.action == "initialize")
+        if not signed(cfg):
+            need(not args.secret_key_file and not args.gnupg_home, "unsigned policy does not accept signing credentials")
+        LOCK.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        protected_path(LOCK)
+        lock_fd = os.open(LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        shared = args.action in ("status", "check-pending", "verify-running", "run")
+        fcntl.flock(lock_fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+        if args.action != "merge-rollback":
+            check_policy(cfg, initialize=args.action == "initialize")
+        if args.action != "merge-rollback":
+            state = cfg["state_dir"]
+            need(not state.is_symlink(), "generation state must not be a symlink")
+            state.mkdir(parents=True, exist_ok=True, mode=0o700)
+            need(state.stat().st_uid == 0 and not state.stat().st_mode & 0o022,
+                 "generation state must be root-owned and protected")
         if args.action == "status":
             command_status(cfg)
+        elif args.action == "verify-running":
+            command_verify_running(cfg)
+        elif args.action == "check-pending":
+            check_pending(cfg)
+            print("Healthy pending root-generation transaction verified.")
+        elif args.action == "run":
+            command_run(cfg, args)
         else:
-            if args.action != "merge-rollback":
+            if signed(cfg):
                 need(bool(args.secret_key_file) != bool(args.gnupg_home),
                      "mutating commands require exactly one signing source: --secret-key-file or --gnupg-home")
             if args.action == "initialize": command_initialize(cfg, args)
@@ -875,8 +1167,11 @@ def main() -> int:
             elif args.action == "prune": command_prune(cfg, args)
             else: command_merge_rollback(cfg, args)
         return 0
-    except (RuntimeError, OSError, KeyError) as exc:
-        print(f"signed-generation: {exc}", file=sys.stderr)
+    except KeyboardInterrupt:
+        print("generation: interrupted; pending recovery checkpoint retained", file=sys.stderr)
+        return 130
+    except (RuntimeError, OSError, KeyError, ValueError) as exc:
+        print(f"generation: {exc}", file=sys.stderr)
         return 1
     finally:
         if lock_fd is not None:

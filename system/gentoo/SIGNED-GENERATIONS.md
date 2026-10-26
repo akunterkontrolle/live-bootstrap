@@ -5,6 +5,12 @@ continues to boot its installed kernel and initramfs directly through QEMU.
 It does not need Libreboot, GRUB signing, or this manager. The manager checks
 `/etc/ms1504-root-identity` and refuses a VM profile.
 
+For desktop testing with the existing unsigned firmware route, use
+[unsigned hardware checkpoints](GENERATIONS.md) first. Do not create this
+signed configuration merely to pass the desktop gate. Transition of an existing
+unsigned generation tree to enforced signed boot needs its later review;
+changing a policy string is refused.
+
 ## Signing key and first signed boot
 
 Create a dedicated OpenPGP signing key on an offline, trusted workstation. The
@@ -118,8 +124,11 @@ sudo ms1504-signed-generation --config /path/to/target-generation.toml \
   --recovery-receipts /mnt/recovery-media/generation-receipts
 ```
 
-The command verifies root identity, checks hibernation state, refuses active or
-mounted LVs, requires exact TTY confirmation, records a durable merge intent
+The current offline merge supports the newest recovery generation only; older
+generations remain boot-selectable. The command verifies root identity, checks
+hibernation state, refuses mounted/in-use LVs and deactivates the involved
+origin/snapshot before merging. It requires exact TTY confirmation and records
+a durable merge intent
 on a separately mounted persistent filesystem outside the target VG, and waits
 for the classic snapshot merge. It mounts the restored origin to verify the
 generation marker and repair the root's transaction state before deactivating

@@ -57,14 +57,12 @@ case "$current_profile" in
 esac
 [ -d "$DESKTOP_PROFILE" ] || die 'pinned desktop profile is missing.'
 grep -Fxq "profile=$GENTOO_MODE" /etc/ms1504-root-identity || die 'installed mode identity differs from the input bundle.'
-GENERATION_STATE=
 if [ "$GENTOO_MODE" = hardware ]; then
-    need ms1504-signed-generation
-    [ -r /etc/ms1504-signed-generation.toml ] || die 'hardware desktop updates require the signed-generation configuration.'
-    GENERATION_STATE=$(python3 -c 'import pathlib, sys, tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text())["state"]["directory"])' \
-        /etc/ms1504-signed-generation.toml) || die 'cannot read the signed-generation state directory.'
-    [ -d "$GENERATION_STATE/pending" ] || die 'run ms1504-signed-generation begin before changing hardware packages.'
-    ms1504-signed-generation status || die 'signed-generation status check failed.'
+    need ms1504-generation
+    ms1504-generation check-pending || die 'begin a healthy root-generation transaction before changing hardware packages.'
+    if [ "${MS1504_GENERATION_MONITORED:-}" != 1 ]; then
+        exec ms1504-generation run -- env MS1504_GENERATION_MONITORED=1 "$SCRIPT_PATH" "$@"
+    fi
 fi
 
 mountpoint -q /extra || die '/extra is not mounted; unlock and mount the encrypted source/build disk first.'
@@ -305,8 +303,8 @@ for service_runlevel in 'dbus default' 'elogind boot' 'bluetooth default' 'displ
         die "OpenRC service is not enabled in the expected runlevel: $service/$runlevel"
 done
 
-printf 'Desktop package build and OpenRC service registration completed. Review the signed system-generation procedure before activating it as the default.\n'
+printf 'Desktop package build and OpenRC service registration completed. Seal the pending root generation before activating it as the default.\n'
 if [ "$GENTOO_MODE" = hardware ]; then
-    [ -d "$GENERATION_STATE/pending" ] || die 'signed-generation transaction disappeared during desktop build.'
-    printf 'Hardware update remains protected by its pending rollback transaction. Seal a new signed generation before rebooting.\n'
+    ms1504-generation check-pending || die 'root-generation protection failed during desktop build.'
+    printf 'Hardware update remains protected by its pending rollback transaction. Seal a new generation before rebooting; signing follows its configured boot policy.\n'
 fi

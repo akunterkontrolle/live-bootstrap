@@ -44,7 +44,7 @@ class InstalledUpdateTests(unittest.TestCase):
         self.pack()
         for name, value in {'PREFIX': self.prefix, 'SBIN': self.sbin, 'STATE': self.root / 'state',
                             'EXTRA_LOCK': self.root / 'extra/lock', 'DESKTOP_LOCK': self.root / 'run/desktop.lock',
-                            'DESKTOP_STATE': self.root / 'desktop'}.items():
+                            'GENERATION_LOCK': self.root / 'run/generation.lock', 'DESKTOP_STATE': self.root / 'desktop'}.items():
             patch = mock.patch.object(update, name, value)
             patch.start()
             self.addCleanup(patch.stop)
@@ -83,6 +83,8 @@ class InstalledUpdateTests(unittest.TestCase):
         self.assertEqual((self.active / 'config.sh').read_bytes(), self.config)
         self.assertEqual(destination.stat().st_mode & 0o777, 0o755)
         update.verify_active()
+        for entry in ('ms1504-generation', 'ms1504-signed-generation'):
+            self.assertEqual((self.sbin / entry).resolve().parent, destination)
         history = (update.STATE / (destination.name + '.json')).read_bytes()
         update.activate(self.archive, True)
         self.assertEqual((update.STATE / (destination.name + '.json')).read_bytes(), history)
@@ -133,6 +135,14 @@ class InstalledUpdateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'desktop has started'):
             update.activate(self.archive, True)
         self.assertEqual((update.DESKTOP_STATE / 'desktop-plan.done').read_text(), 'keep receipt\n')
+
+    def test_running_generation_monitor_blocks_code_activation(self):
+        update.GENERATION_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        with update.GENERATION_LOCK.open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(ValueError, 'operation is running'):
+                update.activate(self.archive, True)
+        self.assertEqual((self.sbin / 'ms1504-extra').resolve().parent, self.active)
 
     def test_verification_detects_changed_active_code(self):
         update.activate(self.archive, True)

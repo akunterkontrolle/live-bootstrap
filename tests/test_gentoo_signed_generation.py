@@ -2,6 +2,8 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import subprocess
+import os
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -52,13 +54,44 @@ class SignedGenerationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'duplicate'):
                 manager.parse_fields(path)
 
-    def test_snapshot_creation_always_thaws_after_lvcreate_failure(self):
-        with patch.object(manager, 'run', side_effect=[b'', RuntimeError('lvcreate failed'), b'']) as run:
+    def test_snapshot_creation_delegates_sync_to_lvm_without_outer_root_freeze(self):
+        with patch.object(manager, 'run', side_effect=RuntimeError('lvcreate failed')) as run:
             with self.assertRaisesRegex(RuntimeError, 'lvcreate failed'):
                 manager.create_snapshot(self.cfg, 'root_rollback_base', 32)
-        self.assertEqual(run.call_args_list[0].args[0], ['fsfreeze', '-f', '/'])
-        self.assertEqual(run.call_args_list[1].args[0][0], 'lvcreate')
-        self.assertEqual(run.call_args_list[2].args[0], ['fsfreeze', '-u', '/'])
+        self.assertEqual(run.call_args.args[0], ['lvcreate', '--snapshot', '--size', '32G',
+                                               '--name', 'root_rollback_base', '/dev/gentoo/root'])
+        self.assertEqual(run.call_count, 1)
+
+    def test_lvm_reports_use_c_locale_and_separate_stderr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lvs = Path(tmp) / 'lvs'
+            lvs.write_text('#!' + sys.executable + '\nimport os,sys\n'
+                           'print("warning on stderr", file=sys.stderr)\n'
+                           'print("swi-a-s--- root " + ("0.00 34359738368" if os.environ.get("LC_ALL") == "C" else "0,00 34359738368"))\n')
+            lvs.chmod(0o755)
+            with patch.dict(os.environ, {'PATH': tmp + os.pathsep + os.environ['PATH'],
+                                        'LC_ALL': 'de_DE.UTF-8', 'LC_NUMERIC': 'de_DE.UTF-8'}):
+                self.assertEqual(manager.snapshot_health(self.cfg, 'root_rollback_base'), (0.0, 34359738368))
+                spec = spec_from_file_location('locale_probe', GENTOO / 'probes/generation-lvm.py')
+                probe = module_from_spec(spec)
+                spec.loader.exec_module(probe)
+                self.assertEqual(probe.run(['lvs']).decode().strip(), 'swi-a-s--- root 0.00 34359738368')
+
+    def test_unexpected_percentage_has_a_diagnostic_instead_of_value_error(self):
+        for value in ('0,00', 'unknown', 'nan', 'inf'):
+            with self.subTest(value=value), patch.object(manager, 'run', return_value=f'swi-a-s--- root {value} 34359738368'.encode()):
+                with self.assertRaisesRegex(RuntimeError, 'C-locale number'):
+                    manager.snapshot_health(self.cfg, 'root_rollback_base')
+
+    def test_automated_commands_do_not_inherit_an_interactive_stdin(self):
+        original_run = subprocess.run
+        def checked(command, **kwargs):
+            self.assertEqual(kwargs.get('stdin'), subprocess.DEVNULL)
+            return original_run(command, **kwargs)
+        with patch.object(manager.subprocess, 'run', side_effect=checked):
+            result = manager.run([sys.executable, '-c', 'import sys; print(repr(sys.stdin.read()))'])
+        self.assertEqual(result.strip(), b"''")
+        self.assertEqual(manager.run([sys.executable, '-c', 'import sys; print(sys.stdin.read())'], input=b'explicit input').strip(), b'explicit input')
 
     def test_batch_scripts_parse_and_flash_has_explicit_gates(self):
         for path in [GENTOO / 'install-signed-generation-tools.sh', GENTOO / 'export-boot-signing-key.sh',

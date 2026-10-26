@@ -79,6 +79,14 @@ class InstalledGrubTests(unittest.TestCase):
             grub.publish(self.root, '6.12.111')
         self.assertEqual(menu.read_text(), 'reviewed signed menu')
 
+    def test_base_generator_refuses_manager_owned_unsigned_menu(self):
+        menu = self.root / 'boot/grub/grub.cfg'
+        menu.write_text('managed unsigned menu')
+        (self.root / 'boot/grub/generation-policy.json').write_text('{"policy":"unsigned"}')
+        with self.assertRaisesRegex(ValueError, 'generation manager owns'):
+            grub.publish(self.root, '6.12.111')
+        self.assertEqual(menu.read_text(), 'managed unsigned menu')
+
     def test_wrong_root_uuid_bootstrap_init_missing_initramfs_and_symlink_escape_refuse(self):
         with self.assertRaisesRegex(ValueError, 'UUID differs'):
             grub.plan(self.root, '6.12.111', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
