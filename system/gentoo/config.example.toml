@@ -18,20 +18,33 @@ timezone = "Europe/Berlin"
 allow_weak_passwords = false
 volume_group = "gentoo"
 
+# Installed root-disk LVM allocation, in GiB (both VM and hardware).
+# root/swap are fixed sizes; reserve stays unallocated in the VG.
+# /home receives the remainder and must meet home_min_gib.
+# This does not size the separate workspace or extra disk.
 [layout]
 root_gib = 200
 swap_gib = 90
 reserve_gib = 100
 home_min_gib = 20
 
+# Build filesystem identity and bootstrap networking, not disk allocation.
 [workspace]
 label = "GENTOO_BUILD"
+# Hardware: see HARDWARE-WORKSPACE.md before preparing or booting media.
+# The original bootstrap currently formats DISK=sda and moves its root there;
+# its filesystem identity must be reconciled with these workspace settings.
+# The VM launcher creates a separate workspace automatically.
 # Optional existing filesystem UUID. Empty means discover exactly one label.
+# Both UUID (when set) and label must match the existing filesystem.
 uuid = ""
 network_interface = "eth0"
 
-# Image capacities only; CPU/RAM and original bootstrap target size stay with
-# rootfs.py. Root grows to fit layout plus metadata allowance when necessary.
+# VM-only whole-image capacities in GiB; ignored for physical disk sizing.
+# images.root_gib is the whole disk; layout.root_gib is its root LV.
+# A new root image is max(images.root_gib, sum(layout values) + 2 GiB).
+# Existing images are never automatically resized. CPU/RAM and original
+# bootstrap disk size are set through rootfs.py, not this section.
 [images]
 workspace_gib = 128
 scratch_gib = 128
@@ -43,7 +56,11 @@ extra_gib = 128
 # Model is the canonical sysfs device/model value; it may be shorter than
 # udev's marketing name and must be observed on the target.
 # The protected USB boot medium requires its serial and capacity bounds.
-# boot is the original bootstrap medium; extra initially holds the workspace.
+# boot_by_id identifies the protected whole USB/bootstrap disk, not the
+# location of the continuation kernel or the installed Gentoo /boot directory.
+# The original bootstrap moves / to DISK (currently defaults to sda); on the
+# verified T440p run this is extra, which also holds the continuation kernel.
+# extra initially holds the workspace; installed Gentoo later boots from root.
 [hardware_disks]
 root_by_id = ""
 root_serial = ""
