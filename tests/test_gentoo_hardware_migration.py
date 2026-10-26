@@ -12,7 +12,14 @@ class HardwareMigrationTests(unittest.TestCase):
     def run_fixture(self, **changes):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / 'mnt').mkdir()
+            if not changes.get('MISSING_PARENT'):
+                (root / 'mnt').mkdir()
+            if changes.get('PARENT_SYMLINK'):
+                (root / 'mnt').rmdir()
+                (root / 'mnt').symlink_to(root)
+            if changes.get('PARENT_FILE'):
+                (root / 'mnt').rmdir()
+                (root / 'mnt').write_text('preserve operator file')
             if changes.get('SYMLINK'):
                 (root / 'mnt/gentoo-workspace').symlink_to(root)
             source = (GENTOO / 'setup-extra.sh').read_text()
@@ -42,7 +49,7 @@ findmnt() {
 }
 mountpoint() { return 1; }
 mount() { echo "mount $*"; }
-check_workspace_source() { echo "check $1"; }
+check_workspace_source() { SOURCE_MOUNT=$1; echo "check $1"; }
 check_installed_continuation() { :; }
 select_migration_policy() { :; }
 copy_and_verify_migration() { echo copy-and-verify; }
@@ -60,10 +67,17 @@ copy_and_verify_migration() { echo copy-and-verify; }
         self.assertLess(result.stdout.index('mount -t'), result.stdout.index('check '))
         self.assertLess(result.stdout.index('check '), result.stdout.index('copy-and-verify'))
 
+    def test_missing_mount_parent_is_created_then_workspace_is_mounted_readonly(self):
+        result = self.run_fixture(MISSING_PARENT='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('mount -t ext4 -o ro,noload /dev/sdb1 ', result.stdout)
+        self.assertIn('copy-and-verify', result.stdout)
+
     def test_ambiguous_uuid_wrong_disk_filesystem_and_vm_refuse_before_mount(self):
         for changes in ({'CANDIDATES': '/dev/sdb1\n/dev/sdz1'}, {'PARENT': 'sdc'},
                         {'TYPE': 'xfs'}, {'PROFILE': 'vm'}, {'SYMLINK': '1'},
-                        {'DISCOVERY_STATUS': '2'}, {'EXISTING': '/build'}):
+                        {'DISCOVERY_STATUS': '2'}, {'EXISTING': '/build'},
+                        {'PARENT_SYMLINK': '1'}, {'PARENT_FILE': '1'}):
             with self.subTest(changes=changes):
                 result = self.run_fixture(**changes)
                 self.assertNotEqual(result.returncode, 0)

@@ -12,6 +12,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
 . "$SCRIPT_DIR/lib/mounts.sh"
 . "$SCRIPT_DIR/lib/bootstrap-tools.sh"
 . "$SCRIPT_DIR/lib/installer-filesystems.sh"
+. "$SCRIPT_DIR/lib/installer-erase.sh"
 MODE=--plan; [ "$#" -eq 0 ] || MODE=$1
 case "$MODE" in --plan|--initialize-storage|--resume-storage|--install-root) ;; *) gentoo_die 'usage: install-base.sh [--plan|--initialize-storage|--resume-storage|--install-root]' ;; esac
 [ "$#" -le 1 ] || gentoo_die 'pass one installer mode'
@@ -124,7 +125,7 @@ resolve_disks() {
     [ "$ROOT_BYTES" -ge "$(((ROOT_GIB + SWAP_GIB + RESERVE_GIB + HOME_MIN_GIB + 2) * 1073741824))" ] || fail 'root disk too small for layout.'
     ROOT_WWN_OBSERVED=$(installer_disk_attribute WWN "$ROOT_REAL" | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
     ROOT_MODEL_OBSERVED=$(installer_disk_attribute MODEL "$ROOT_REAL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    while IFS= read -r child; do [ -z "$child" ] || [ -z "$(findmnt -rn -S "$child" -o TARGET 2>/dev/null || true)" ] || fail "target is mounted: $child"; done < <(lsblk -nrpo NAME "$ROOT_REAL")
+    installer_require_unused_root allow-mappings
 }
 native_run() { chroot "$NATIVE_ROOT" /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C "$@"; }
 lvm_run() { local op=$1; shift; native_run lvm "$op" --config 'activation { udev_sync=0 udev_rules=0 }' "$@"; }
@@ -164,6 +165,7 @@ initialize_blank_luks() {
             fail "LUKS initialization is ambiguous ($marker); inspect before proceeding."
     done
     [ ! -e /dev/mapper/gentoo-crypt ] || fail 'root mapper already exists.'
+    if [ -f "$STATE/erase-approved.done" ]; then installer_clear_authorized_partition; fi
     signatures=$(wipefs --no-act --noheadings --output TYPE "$ROOT_PART") ||
         fail 'cannot inspect partition signatures.'
     [ -z "$signatures" ] || fail 'partition has existing signatures; refusing LUKS initialization.'
@@ -360,7 +362,7 @@ copy_continuation_bundle() {
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/setup-extra.sh "$TARGET_ROOT/usr/local/sbin/ms1504-extra"
     mkdir -p "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/lib" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/sources"
-    for name in workspace-retention.py source-only-emerge.py cpu-policy.py lib/repository-policy.sh lib/devices.sh lib/hardware-discovery.sh sources/gentoo-repository.lock complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
+    for name in installed-grub.py installed-update.py workspace-retention.py source-only-emerge.py cpu-policy.py lib/repository-policy.sh lib/devices.sh lib/hardware-discovery.sh sources/gentoo-repository.lock complete-desktop.sh desktop-packages.list desktop-package.use desktop-package.accept_keywords desktop-package.mask desktop-rust-bootstrap.py desktop-lightdm.conf config.sh; do
         install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
     done
     for name in "${GENTOO_PACKAGES_DESKTOP:-}" "${GENTOO_PACKAGES_DESKTOP_USE:-}" \
@@ -369,6 +371,10 @@ copy_continuation_bundle() {
         [[ "$name" =~ ^policy/[A-Za-z0-9_.+-]+$ ]] || fail "unsafe desktop policy input path: $name"
         install -D -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
     done
+    chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/installed-grub.py" \
+        "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/installed-update.py"
+    ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/installed-grub.py "$TARGET_ROOT/usr/local/sbin/ms1504-grub-config"
+    ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/installed-update.py "$TARGET_ROOT/usr/local/sbin/ms1504-continuation-update"
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/complete-desktop.sh"
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/desktop-rust-bootstrap.py"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/complete-desktop.sh "$TARGET_ROOT/usr/local/sbin/complete-desktop"
@@ -422,6 +428,7 @@ install_root() {
     python3 "$SCRIPT_DIR/retire-bootstrap-nscd.py" --root "$TARGET_ROOT" \
         --sysroot "$WORK_ROOT/sysroot-x86_64" --backup "$WORK_ROOT/repair-state/nscd-installed" --apply
     install -d -m 1777 "$TARGET_ROOT/tmp" "$TARGET_ROOT/var/tmp"
+    install -d -m 0755 "$TARGET_ROOT/mnt" "$TARGET_ROOT/media"
     copy_continuation_bundle
     python3 "$SCRIPT_DIR/configure-installed-portage.py" --root "$TARGET_ROOT"
     (cd "$WORK_ROOT/artifacts/kernel-$RELEASE" && sha256sum -c SHA256SUMS)
@@ -500,6 +507,8 @@ install_root() {
     install -m 0644 "$TARGET_ROOT/boot/initramfs-$module_release.img" "$WORK_ROOT/artifacts/installed-base/initramfs.tmp"
     mv "$WORK_ROOT/artifacts/installed-base/kernel.tmp" "$WORK_ROOT/artifacts/installed-base/kernel"
     mv "$WORK_ROOT/artifacts/installed-base/initramfs.tmp" "$WORK_ROOT/artifacts/installed-base/initramfs"
+    python3 "$SCRIPT_DIR/installed-grub.py" --root "$TARGET_ROOT" --release "$module_release" \
+        --root-uuid "$root_uuid" --check-in-chroot --apply
     cmdline=$(cat "$TARGET_ROOT/etc/kernel/cmdline")
     temp=$(mktemp "$STATE/.installed-boot.XXXXXX")
     printf 'release=%s\nkernel sha256=%s\ninitramfs sha256=%s\nworkspace UUID=%s\ncmdline=%s\n' \
@@ -534,8 +543,10 @@ case "$MODE" in
         [ -t 0 ] || fail 'interactive terminal required.'
         native_mounts; trap 'native_unmounts' EXIT
         verify_target
-        signatures=$(wipefs --no-act --noheadings --output TYPE "$ROOT_REAL") || fail 'cannot inspect root signatures.'
-        [ -z "$signatures" ] || fail 'target contains existing signatures; inspect before proceeding.'
+        [ ! -e "$STATE/storage.started" ] && [ ! -e "$STATE/storage.done" ] || fail 'storage already started; use plan/resume.'
+        printf 'WARNING: this erases previous partition tables, encrypted headers and filesystems on the confirmed root disk.\n'
+        signatures=$(installer_signature_inventory)
+        [ -z "$signatures" ] || printf 'WARNING: existing root-disk signatures will be destroyed after confirmation:\n%s\n' "$signatures"
         printf 'ERASE %s %s\n' "$ROOT_SERIAL" "$ROOT_MAJMIN" > /dev/tty
         read_tty_line 'Type the exact line above: ' confirmation
         [ "$confirmation" = "ERASE $ROOT_SERIAL $ROOT_MAJMIN" ] || fail 'confirmation mismatch.'
@@ -543,10 +554,14 @@ case "$MODE" in
         [ ! -e "$STATE/storage.started" ] && [ ! -e "$STATE/storage.done" ] || fail 'storage already started; use plan/resume.'
         phase target.identity "profile=$GENTOO_MODE" "serial=$ROOT_SERIAL" "size=$ROOT_BYTES" "major:minor=$ROOT_MAJMIN" "wwn=$ROOT_WWN_OBSERVED" "model=$ROOT_MODEL_OBSERVED" "root device=$ROOT_REAL" "volume group=$VG" "root GiB=$ROOT_GIB" "swap GiB=$SWAP_GIB" "reserve GiB=$RESERVE_GIB" "home minimum GiB=$HOME_MIN_GIB"
         phase storage.started "target serial=$ROOT_SERIAL" "major:minor=$ROOT_MAJMIN"
+        phase erase-approved.done 'policy=erase previous signatures before first LUKS format' "target identity sha256=$(sha256 "$STATE/target.identity")"
+        installer_require_unused_root
+        mkdir -p "$STATE/signature-backups"; chmod 0700 "$STATE/signature-backups"
+        wipefs --all --backup="$STATE/signature-backups" "$ROOT_REAL"
         native_run sgdisk --zap-all --clear --new=1:0:0 --typecode=1:8309 --change-name=1:GENTOO-ROOT "$ROOT_REAL"
         sync; native_run blockdev --rereadpt "$ROOT_REAL"; native_run udevadm settle --timeout=30
         [ -b "$ROOT_PART" ] && [ "$(lsblk -dnro PARTTYPE "$ROOT_PART" | tr '[:lower:]' '[:upper:]')" = CA7D7CCB-63ED-4C53-861C-1742536059CC ] || fail 'GPT partition verification failed.'
-        phase partition.done "partition=$ROOT_PART" 'type=CA7D7CCB-63ED-4C53-861C-1742536059CC'
+        phase partition.done "partition=$ROOT_PART" 'type=CA7D7CCB-63ED-4C53-861C-1742536059CC' "partition UUID=$(blkid -p -s PART_ENTRY_UUID -o value "$ROOT_PART")"
         initialize_blank_luks
         resume_storage; native_unmounts; trap - EXIT
         ;;

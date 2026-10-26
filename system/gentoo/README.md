@@ -159,7 +159,9 @@ backup verification and source-authentication limits.
    ```
 
    Type the displayed `ERASE <serial> <major:minor>` confirmation, then answer
-   passphrase prompts. This creates GPT/LUKS2/LVM and root/home/swap.
+   passphrase prompts. Existing tables/LUKS/filesystem signatures on that root
+   target are warned about and cleared after confirmation. This creates
+   GPT/LUKS2/LVM and root/home/swap; mounted or active targets are refused.
    **After an interruption**, inspect the plan and resume instead:
 
    ```sh
@@ -176,7 +178,9 @@ backup verification and source-authentication limits.
    bash "$driver" install-root
    ```
 
-   Run the printed handoff shutdown helper from `/` and wait for poweroff.
+   This also generates `/boot/grub/grub.cfg` inside encrypted root using the
+   installed kernel, matching initramfs and recorded dracut arguments. Run the
+   printed handoff shutdown helper from `/` and wait for poweroff.
 
 4. **VM host:** boot the installed kernel/initramfs.
 
@@ -185,10 +189,11 @@ backup verification and source-authentication limits.
      --run-dir target-gentoo-fresh/gentoo-run --apply
    ```
 
-   **T440p:** use the existing unsigned firmware route with the installed artifacts
-   and exact LUKS/LVM command line in
-   `gentoo-bootstrap/install-base-state/installed-boot.receipt` on the workspace.
-   See [hardware boot handoff](HARDWARE-WORKSPACE.md#installed-system-boot).
+   **T440p:** use Libreboot's existing unlock/LVM route to read the installed
+   encrypted `/boot/grub/grub.cfg`. No intermediate installed-system entry on
+   extra is needed for a fresh run. See
+   [hardware boot handoff](HARDWARE-WORKSPACE.md#installed-system-boot) and
+   [existing-system update instructions](INSTALLED-UPDATES.md).
 
 5. **Installed user:** unlock root, log in and run the
    [base acceptance checks](OPERATIONS.md#base-verification-and-replay-acceptance):
@@ -216,13 +221,18 @@ backup verification and source-authentication limits.
    sudo ms1504-extra migrate --source /mnt/gentoo-workspace
    ```
 
-   **T440p, after the hardware migration review:** one command resolves and
+   **T440p with combined bootstrap root/workspace:** first deploy the current
+   helpers and boot-test the encrypted-root menu as described in
+   [INSTALLED-UPDATES.md](INSTALLED-UPDATES.md). Then one command resolves and
    mounts the recorded workspace read-only, then copies and verifies it:
 
    ```sh
-   sudo ms1504-extra migrate
+   sudo ms1504-extra migrate --bootstrap-root
    ```
 
+   The hardware scope retains only the needed `gentoo-bootstrap` subtree; back
+   up any other old-root data separately. VM retention is unchanged. Hardware
+   initialization refuses until the encrypted-root boot check passes.
    The source must be offline and not mounted elsewhere. A failed copy can be
    retried with the same command. Wait for successful manifest verification.
    [Retention policy](WORKSPACE-RETENTION.md) omits disposable bootstrap work
@@ -274,6 +284,9 @@ backup verification and source-authentication limits.
    battery/thermals, suspend or firmware trust on the physical machine.
 
 ## Reference and later work
+
+- [Installed code updates and encrypted-root boot](INSTALLED-UPDATES.md): verified
+  USB deployment, preserved local settings and hardware migration commands.
 
 - [Operations](OPERATIONS.md): backups, resources, acceptance, recovery, CPU/source
   policy, manual desktop alternative and CI/maintainer commands.

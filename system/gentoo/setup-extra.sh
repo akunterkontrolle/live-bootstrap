@@ -11,7 +11,7 @@ case "$MODE" in --plan|plan) MODE=plan ;; --migrate|migrate) MODE=migrate ;;
     --restore|restore) MODE=restore ;; --verify|verify) MODE=verify ;;
     --retention-plan|retention-plan) MODE=retention-plan ;;
     --discard-migration|discard-migration) MODE=discard-migration ;;
-    *) echo 'Usage: ms1504-extra {plan|retention-plan --source MOUNT|migrate [--source MOUNT]|initialize --source MOUNT|resume|restore|verify|discard-migration}' >&2; exit 2 ;; esac
+    *) echo 'Usage: ms1504-extra {plan|retention-plan --source MOUNT|migrate [--bootstrap-root] [--source MOUNT]|initialize --source MOUNT|resume|restore|verify|discard-migration}' >&2; exit 2 ;; esac
 
 . "$(dirname -- "$(readlink -f "$0")")/lib/devices.sh"
 gentoo_die() { fail "$@"; }
@@ -31,6 +31,7 @@ MIGRATION=$MIGRATION_BASE
 RETENTION_TOOL="$(dirname -- "$(readlink -f "$0")")/workspace-retention.py"
 RETENTION_POLICY=full
 RSYNC_SELECTION=()
+RETENTION_ARGS=()
 DATA=$MIGRATION/data
 KEY=/root/.keys/ms1504-extra.key
 MAPPER=ms1504-extra
@@ -89,25 +90,34 @@ fi
 
 # The base lock serializes old and selected migration journals alike.
 use_selected_migration() {
-    STATE=$STATE_BASE/installed-continuation-v1
-    MIGRATION=$MIGRATION_BASE/installed-continuation-v1
+    local selected=${1:-installed-continuation-v1}
+    case "$selected" in installed-continuation-v1|installed-bootstrap-root-v1) ;; *) fail 'unknown migration policy';; esac
+    RETENTION_ARGS=()
+    if [[ $selected == installed-bootstrap-root-v1 ]]; then
+        [[ ${PROFILE:-} == hardware ]] || fail 'bootstrap-root scope is hardware-only.'
+        RETENTION_ARGS=(--bootstrap-root)
+    fi
+    STATE=$STATE_BASE/$selected
+    MIGRATION=$MIGRATION_BASE/$selected
     DATA=$MIGRATION/data
-    RETENTION_POLICY=installed-continuation-v1
+    RETENTION_POLICY=$selected
     [[ ! -L $STATE && ! -L $MIGRATION && ! -L $MIGRATION_BASE ]] || fail 'selected migration paths are unsafe.'
     local excludes marker
     for marker in initialize.started initialize.done partition.done luks.started luks.done filesystem.started filesystem.done restore.done; do
         [[ ! -e $STATE_BASE/$marker ]] || fail 'legacy initialization conflicts with the selected migration journal.'
     done
-    excludes=$(python3 "$RETENTION_TOOL" excludes) || fail 'cannot read retention policy.'
+    excludes=$(python3 "$RETENTION_TOOL" excludes "${RETENTION_ARGS[@]}") || fail 'cannot read retention policy.'
     RSYNC_SELECTION=()
-    while IFS= read -r pattern; do RSYNC_SELECTION+=("--exclude=$pattern"); done <<< "$excludes"
+    while IFS= read -r pattern; do
+        case "$pattern" in INCLUDE:*) RSYNC_SELECTION+=("--include=${pattern#INCLUDE:}");; *) RSYNC_SELECTION+=("--exclude=$pattern");; esac
+    done <<< "$excludes"
 }
 
 check_retention_policy() {
     [[ $RETENTION_POLICY != full ]] || return 0
     [[ -f $STATE/retention-policy.json && ! -L $STATE/retention-policy.json ]] || fail 'selected migration policy receipt is missing.'
     local current recorded
-    current=$(python3 "$RETENTION_TOOL" policy) || fail 'cannot read current retention policy.'
+    current=$(python3 "$RETENTION_TOOL" policy "${RETENTION_ARGS[@]}") || fail 'cannot read current retention policy.'
     recorded=$(cat "$STATE/retention-policy.json")
     [[ $current == "$recorded" ]] || fail 'retention policy changed; do not reuse this migration journal.'
 }
@@ -115,8 +125,8 @@ check_retention_policy() {
 if [[ -e $STATE_BASE/active-migration || -L $STATE_BASE/active-migration ]]; then
     [[ -f $STATE_BASE/active-migration && ! -L $STATE_BASE/active-migration &&
         $(stat -c '%u:%g:%a' "$STATE_BASE/active-migration") == 0:0:600 &&
-        $(cat "$STATE_BASE/active-migration") == installed-continuation-v1 ]] || fail 'invalid active migration selector.'
-    use_selected_migration
+        $(cat "$STATE_BASE/active-migration") =~ ^(installed-continuation-v1|installed-bootstrap-root-v1)$ ]] || fail 'invalid active migration selector.'
+    use_selected_migration "$(cat "$STATE_BASE/active-migration")"
     check_retention_policy
 fi
 
@@ -127,24 +137,31 @@ check_installed_continuation() {
 }
 
 select_migration_policy() {
-    [[ $RETENTION_POLICY == full ]] || return 0
-    local marker
+    local requested=${1:-installed-continuation-v1} marker
+    if [[ $RETENTION_POLICY != full ]]; then
+        if [[ $RETENTION_POLICY == "$requested" ]]; then return 0; fi
+        [[ ${PROFILE:-} == hardware && $requested == installed-bootstrap-root-v1 ]] || fail 'requested scope differs from active migration; preserve the journal.'
+        for marker in initialize.started initialize.done partition.done luks.started luks.done filesystem.started filesystem.done restore.done; do
+            [[ ! -e $STATE/$marker ]] || fail 'cannot switch scope after extra initialization has started.'
+        done
+        printf 'Selecting explicit bootstrap-root scope; previous staging and journal remain at %s and %s.\n' "$MIGRATION" "$STATE"
+    fi
     for marker in initialize.started initialize.done partition.done luks.started luks.done filesystem.started filesystem.done restore.done; do
         [[ ! -e $STATE_BASE/$marker ]] || fail 'legacy extra initialization has started; retaining its full-migration journal.'
     done
     # Keep all legacy receipts and the legacy /data tree separate and unchanged.
-    use_selected_migration
+    use_selected_migration "$requested"
     mkdir -p "$STATE"; chmod 0700 "$STATE"
     [[ $(stat -c '%u:%g:%a' "$STATE") == 0:0:700 ]] || fail 'selected state ownership is unsafe.'
     if [[ -e $STATE/retention-policy.json ]]; then
         check_retention_policy
     else
-        python3 "$RETENTION_TOOL" policy > "$STATE/retention-policy.json.tmp"
+        python3 "$RETENTION_TOOL" policy "${RETENTION_ARGS[@]}" > "$STATE/retention-policy.json.tmp"
         chmod 0600 "$STATE/retention-policy.json.tmp"
         sync "$STATE/retention-policy.json.tmp"
         mv "$STATE/retention-policy.json.tmp" "$STATE/retention-policy.json"
     fi
-    printf 'installed-continuation-v1\n' > "$STATE_BASE/active-migration.tmp"
+    printf '%s\n' "$RETENTION_POLICY" > "$STATE_BASE/active-migration.tmp"
     chmod 0600 "$STATE_BASE/active-migration.tmp"; sync "$STATE_BASE/active-migration.tmp"
     mv "$STATE_BASE/active-migration.tmp" "$STATE_BASE/active-migration"; sync "$STATE_BASE"
 }
@@ -152,7 +169,7 @@ select_migration_policy() {
 check_retained_source() {
     [[ $RETENTION_POLICY != full ]] || return 0
     check_retention_policy
-    python3 "$RETENTION_TOOL" snapshot "$SOURCE_MOUNT" > "$STATE/source.snapshot.tmp"
+    python3 "$RETENTION_TOOL" snapshot "${RETENTION_ARGS[@]}" "$SOURCE_MOUNT" > "$STATE/source.snapshot.tmp"
     if [[ -e $STATE/source.snapshot ]]; then
         cmp -s "$STATE/source.snapshot" "$STATE/source.snapshot.tmp" || fail 'retained source changed since migration started; preserve the journal and inspect it.'
         rm "$STATE/source.snapshot.tmp"
@@ -238,7 +255,7 @@ validate_home_migration() {
     (cd "$DATA" && sha256sum --check --status "$STATE/workspace.sha256") || fail 'preserved migration data failed its file hash manifest.'
     if [[ $RETENTION_POLICY != full ]]; then
         grep -Fxq "retention policy sha256=$(sha256sum "$STATE/retention-policy.json" | awk '{print $1}')" "$STATE/migration.done" || fail 'migration receipt has a different retention policy.'
-        python3 "$RETENTION_TOOL" snapshot --strict "$DATA" > "$STATE/staging.snapshot.tmp"
+        python3 "$RETENTION_TOOL" snapshot --strict "${RETENTION_ARGS[@]}" "$DATA" > "$STATE/staging.snapshot.tmp"
         cmp -s "$STATE/source.snapshot" "$STATE/staging.snapshot.tmp" || fail 'retained staging metadata or content changed.'
         rm "$STATE/staging.snapshot.tmp"
     fi
@@ -282,7 +299,10 @@ mount_recorded_hardware_workspace() {
     parent=$(lsblk -dnro PKNAME "$device" | tr -d '[:space:]')
     [[ -n $parent && $(readlink -f "/dev/$parent") == "$EXTRA_REAL" ]] || fail 'recorded workspace is not on the identified extra disk.'
     target=/mnt/gentoo-workspace
-    [[ -d /mnt && ! -L /mnt && ! -L $target ]] || fail 'workspace mount path is unsafe.'
+    [[ ! -L /mnt ]] || fail 'workspace mount parent /mnt is a symlink; inspect it before migration.'
+    [[ ! -L $target ]] || fail "workspace mountpoint is a symlink: $target"
+    if [[ ! -e /mnt ]]; then install -d -m 0755 /mnt; fi
+    [[ -d /mnt ]] || fail 'workspace mount parent /mnt is not a directory.'
     # findmnt returns 1 for no match; other errors must not authorize a mount.
     if mounts=$(findmnt -rn -S "$device" -o TARGET); then
         [[ $mounts == "$target" ]] || fail 'workspace is already mounted elsewhere; unmount it before automatic migration.'
@@ -319,8 +339,8 @@ copy_and_verify_migration() {
     if [[ $RETENTION_POLICY == full ]]; then
         source_bytes=$(du -sx --block-size=1 "$SOURCE_MOUNT" | awk 'NR==1 {print $1}')
     else
-        python3 "$RETENTION_TOOL" report "$SOURCE_MOUNT"
-        source_bytes=$(python3 "$RETENTION_TOOL" bytes "$SOURCE_MOUNT")
+        python3 "$RETENTION_TOOL" report "${RETENTION_ARGS[@]}" "$SOURCE_MOUNT"
+        source_bytes=$(python3 "$RETENTION_TOOL" bytes "${RETENTION_ARGS[@]}" "$SOURCE_MOUNT")
         check_retained_source
     fi
     available=$(df -B1 --output=avail /home | awk 'NR==2 {print $1}')
@@ -345,7 +365,7 @@ copy_and_verify_migration() {
     [[ -z $differences ]] || fail "staging copy differs from the source: $differences"
     check_retained_source
     if [[ $RETENTION_POLICY != full ]]; then
-        python3 "$RETENTION_TOOL" snapshot --strict "$DATA" > "$STATE/staging.snapshot.tmp"
+        python3 "$RETENTION_TOOL" snapshot --strict "${RETENTION_ARGS[@]}" "$DATA" > "$STATE/staging.snapshot.tmp"
         cmp -s "$STATE/source.snapshot" "$STATE/staging.snapshot.tmp" || fail 'retained staging content or metadata differs from source.'
         rm "$STATE/staging.snapshot.tmp"
     fi
@@ -373,6 +393,60 @@ extra_require_blank() {
     [[ -z $EXTRA_SIGNATURE ]] || fail "existing signature on $device: $EXTRA_SIGNATURE"
     signatures=$(wipefs --no-act --noheadings --output TYPE "$device") || fail "cannot inspect signatures: $device"
     [[ -z $signatures ]] || fail "storage is not verified blank: $device"
+}
+
+# Bind first-partition cleanup to this already-confirmed initialization, verified
+# migration, partition and original key. Legacy journals stay blank-only.
+extra_clear_binding() {
+    local name value
+    printf 'policy=confirmed extra first-format signature clearing v1\n'
+    for name in initialize.started migration.done key.done; do
+        [[ -f $STATE/$name && ! -L $STATE/$name ]] || fail "missing signature-clear prerequisite: $name"
+        value=$(sha256sum "$STATE/$name") || fail 'cannot hash signature-clear prerequisite'
+        printf '%s sha256=%s\n' "$name" "${value%% *}"
+    done
+    printf 'partition UUID=%s\n' "$EXTRA_PART_UUID"
+}
+
+extra_write_clear_record() {
+    local name=$1
+    extra_clear_binding > "$STATE/$name.tmp"
+    chmod 0600 "$STATE/$name.tmp"
+    sync "$STATE/$name.tmp"; mv "$STATE/$name.tmp" "$STATE/$name"; sync "$STATE"
+}
+
+extra_clear_previous_partition_signatures() {
+    local expected recorded signatures children marker
+    [[ -e $STATE/partition-clear.approved || -L $STATE/partition-clear.approved ]] || return 0
+    # Own format intent always wins: never erase our LUKS header or filesystem.
+    for marker in luks.started luks.done filesystem.started filesystem.done initialize.done; do
+        [[ ! -e $STATE/$marker && ! -L $STATE/$marker ]] || return 0
+    done
+    extra_verify_partition_receipt
+    expected=$(extra_clear_binding) || fail 'cannot establish signature-clear binding'
+    [[ -f $STATE/partition-clear.approved && ! -L $STATE/partition-clear.approved ]] || fail 'unsafe signature-clear approval'
+    recorded=$(cat "$STATE/partition-clear.approved")
+    [[ $recorded == "$expected" ]] || fail 'signature-clear approval differs from current initialization'
+    if [[ -e $STATE/partition-clear.done ]]; then
+        [[ -f $STATE/partition-clear.done && ! -L $STATE/partition-clear.done &&
+           $(cat "$STATE/partition-clear.done") == "$expected" ]] || fail 'signature-clear completion differs'
+        return 0
+    fi
+    if [[ -e $STATE/partition-clear.started ]]; then
+        [[ -f $STATE/partition-clear.started && ! -L $STATE/partition-clear.started &&
+           $(cat "$STATE/partition-clear.started") == "$expected" ]] || fail 'signature-clear intent differs'
+    fi
+    extra_check_mounts
+    children=$(lsblk -nrpo NAME "$EXTRA_PART") || fail 'cannot inspect partition holders before signature clearing'
+    [[ $children == "$EXTRA_PART" ]] || fail 'extra partition has active mapped descendants'
+    extra_probe_type "$EXTRA_PART"
+    signatures=$(wipefs --no-act --noheadings --output TYPE "$EXTRA_PART") || fail 'cannot inspect previous extra signatures'
+    [[ -z $signatures ]] || printf 'Clearing old signatures on the confirmed extra partition: %s\n' "$signatures"
+    extra_write_clear_record partition-clear.started
+    install -d -m 0700 "$STATE/signature-backups"
+    wipefs --all --force --backup="$STATE/signature-backups" "$EXTRA_PART"
+    extra_require_blank "$EXTRA_PART"
+    extra_write_clear_record partition-clear.done
 }
 
 extra_check_mounts() {
@@ -517,23 +591,43 @@ case "$MODE" in
         printf 'Profile: %s\nRoot disk: %s (%s)\nExtra disk: %s (%s; %s bytes)\nWorkspace: UUID=%s label=%s\n' \
             "$PROFILE" "$ROOT_DISK" "$ROOT_SERIAL" "$EXTRA_REAL" "$EXTRA_SERIAL" "$EXTRA_BYTES" "$WORKSPACE_UUID" "$WORKSPACE_LABEL"
         printf 'Migration policy: %s\n' "$RETENTION_POLICY"
+        [[ $PROFILE != hardware || $RETENTION_POLICY != full ]] || printf 'Combined bootstrap root: select migrate --bootstrap-root to preserve only gentoo-bootstrap in a separate journal.\n'
         printf 'Migration destination: %s on encrypted /home (%s bytes currently free)\nEncrypted restore: %s; key: %s\nPlan only; no disk changes made.\n' \
             "$MIGRATION" "$home_free" "$MOUNT" "$KEY"
         ;;
     retention-plan)
-        [[ $# -eq 2 && $1 == --source ]] || fail 'retention-plan requires --source MOUNT.'
+        scope=${RETENTION_POLICY:-full}
+        [[ $scope != full ]] || scope=installed-continuation-v1
+        if [[ ${1:-} == --bootstrap-root ]]; then
+            [[ $PROFILE == hardware ]] || fail 'bootstrap-root scope is hardware-only.'
+            scope=installed-bootstrap-root-v1; shift
+        fi
+        [[ $# -eq 2 && $1 == --source ]] || fail 'retention-plan requires [--bootstrap-root] --source MOUNT.'
         check_workspace_source "$2"
-        python3 "$RETENTION_TOOL" report "$SOURCE_MOUNT"
+        if [[ $scope == installed-bootstrap-root-v1 ]]; then
+            python3 "$RETENTION_TOOL" report --bootstrap-root "$SOURCE_MOUNT"
+        else python3 "$RETENTION_TOOL" report "$SOURCE_MOUNT"; fi
         ;;
     migrate)
+        scope=${RETENTION_POLICY:-full}
+        [[ $scope != full ]] || scope=installed-continuation-v1
+        if [[ ${1:-} == --bootstrap-root ]]; then
+            [[ $PROFILE == hardware ]] || fail 'bootstrap-root scope is hardware-only.'
+            scope=installed-bootstrap-root-v1; shift
+        fi
         if [[ $# -eq 0 ]]; then
             mount_recorded_hardware_workspace
         else
-            [[ $# -eq 2 && $1 == --source ]] || fail 'usage: migrate [--source MOUNT].'
+            [[ $# -eq 2 && $1 == --source ]] || fail 'usage: migrate [--bootstrap-root] [--source MOUNT].'
             check_workspace_source "$2"
         fi
+        if [[ $scope == installed-bootstrap-root-v1 ]]; then
+            python3 "$RETENTION_TOOL" report --bootstrap-root "$SOURCE_MOUNT"
+        elif [[ -f $SOURCE_MOUNT/init && -f $SOURCE_MOUNT/steps/bootstrap.cfg ]]; then
+            fail 'combined bootstrap root detected; inspect backups and use migrate --bootstrap-root to retain only gentoo-bootstrap.'
+        fi
         check_installed_continuation
-        select_migration_policy
+        select_migration_policy "$scope"
         copy_and_verify_migration
         echo 'Workspace copy and file manifest verified; source disk is unchanged.'
         ;;
@@ -549,6 +643,10 @@ case "$MODE" in
         cryptsetup status "$MAPPER" >/dev/null 2>&1 && fail 'extra mapper is already open; stop its service and inspect it before initialization.'
         [[ ! -e $KEY && ! -L $KEY ]] || fail 'extra key path already exists; inspect it rather than replacing it.'
         [[ ! -L /root/.keys ]] || fail 'root key directory must not be a symlink.'
+        if [[ $PROFILE == hardware ]]; then
+            python3 "$(dirname -- "$(readlink -f "$0")")/installed-grub.py" --check-running ||
+                fail 'encrypted-root boot has not been verified; do not erase the old boot disk.'
+        fi
         extra_check_mounts "$SOURCE_MOUNT"
         expected="ERASE-EXTRA $EXTRA_SERIAL $EXTRA_MAJMIN"
         topology=$(lsblk -nrpo NAME,TYPE "$EXTRA_REAL") || fail 'cannot read extra-disk topology.'
@@ -587,6 +685,7 @@ case "$MODE" in
         extra_partition_identity
         printf 'partition UUID=%s\n' "$EXTRA_PART_UUID" > "$STATE/partition.done.tmp"
         sync "$STATE/partition.done.tmp"; mv "$STATE/partition.done.tmp" "$STATE/partition.done"; sync "$STATE"
+        extra_write_clear_record partition-clear.approved
         set --
         ;&
     resume)
@@ -598,6 +697,7 @@ case "$MODE" in
             grep -Fxq "major:minor=$EXTRA_MAJMIN" "$STATE/initialize.started" &&
             grep -Fxq "partition UUID=$EXTRA_PART_UUID" "$STATE/partition.done" || fail 'extra partition identity changed.'
         extra_verify_key
+        extra_clear_previous_partition_signatures
         extra_probe_type "$EXTRA_PART"
         if [[ $EXTRA_SIGNATURE == crypto_LUKS ]]; then
             cryptsetup isLuks "$EXTRA_PART" || fail 'LUKS signature has no readable header; inspect manually.'

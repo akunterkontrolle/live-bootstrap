@@ -31,8 +31,11 @@ class ExtraStorageTests(unittest.TestCase):
         (self.state / 'key.done').write_text('key sha256=' + hashlib.sha256(self.key.read_bytes()).hexdigest() + '\n')
         (self.state / 'initialize.started').write_text('serial=EXTRA\nsize=1000000\nmajor:minor=8:16\n')
         (self.state / 'partition.done').write_text('partition UUID=11111111-1111-1111-1111-111111111111\n')
+        (self.state / 'migration.done').write_text('verified migration fixture\n')
         self.helpers = ''.join(function(name) for name in ('extra_probe_type', 'extra_require_blank',
-                                                          'extra_partition_identity', 'extra_verify_key', 'extra_check_mounts'))
+                                                          'extra_partition_identity', 'extra_verify_key', 'extra_check_mounts',
+                                                          'extra_verify_partition_receipt', 'extra_clear_binding',
+                                                          'extra_write_clear_record', 'extra_clear_previous_partition_signatures'))
         self.helpers = self.helpers.replace('[[ -b $EXTRA_PART ]]', '[[ -n $EXTRA_PART ]]')
         self.resume = SOURCE.split('    resume)\n', 1)[1].split('        ;;\n    restore)', 1)[0]
         self.shell = '''set -Eeuo pipefail
@@ -56,11 +59,21 @@ lsblk() {{
       *NAME,TYPE*) echo '/dev/sdb disk';;
       *PKNAME*) echo "${{PARENT:-sdb}}";;
       *MAJ:MIN*) echo 8:16;;
+      *'NAME /dev/sdb1'*) echo /dev/sdb1;;
       *) echo /dev/sdb;;
     esac
 }}
 findmnt() {{ [[ ${{MOUNT_SCAN_FAIL:-0}} == 0 ]] || return 7; printf '%b\\n' "${{MOUNTS:-8:1 /}}"; }}
-wipefs() {{ [[ ${{WIPE_FAIL:-0}} == 0 ]] || return 7; printf '%s' "${{WIPE_SIGNATURE:-}}"; }}
+wipefs() {{
+ [[ ${{WIPE_FAIL:-0}} == 0 ]] || return 7
+ if [[ $* == *--all* ]]; then
+   echo WIPE_OLD >> "$EVENTS"
+   [[ ${{CLEAR_WRITE_FAIL:-0}} == 0 ]] || return 7
+   touch "$STATE/cleared"; return 0
+ fi
+ [[ ! -e $STATE/cleared ]] || return 0
+ printf '%s' "${{WIPE_SIGNATURE:-}}"
+}}
 blkid() {{
     case "$*" in
       *PART_ENTRY_UUID*) echo "${{PART_UUID:-11111111-1111-1111-1111-111111111111}}"; return;;
@@ -73,6 +86,7 @@ blkid() {{
     case " $* " in *' -p -D -s TYPE '*) ;; *) echo 'probe must disable partition metadata' >&2; return 99;; esac
     if [[ ${{!#}} == /dev/sdb1 ]]; then
         if [[ -e $STATE/header ]]; then echo crypto_LUKS; return 0; fi
+        [[ ! -e $STATE/cleared ]] || return 2
         printf '%s' "${{PART_SIGNATURE:-}}"; return "${{PART_STATUS:-2}}"
     else
         if [[ -e $STATE/filesystem ]]; then echo ext4; return 0; fi
@@ -105,7 +119,8 @@ mkfs.ext4() {{
            events=shlex.quote(str(self.root / 'events')), mount=shlex.quote(str(self.root / 'mount')))
 
     def run_resume(self, **env):
-        return subprocess.run(['bash', '-c', self.shell + self.helpers + self.resume],
+        setup = '\nif [[ ${CLEAR_APPROVAL:-0} == 1 && ! -e $STATE/partition-clear.approved ]]; then extra_partition_identity; extra_write_clear_record partition-clear.approved; fi\n'
+        return subprocess.run(['bash', '-c', self.shell + self.helpers + setup + self.resume],
                               env=dict(os.environ, **env), capture_output=True, text=True)
 
     def events(self):
@@ -146,6 +161,70 @@ mkfs.ext4() {{
                 self.assertNotIn('CRYPT_FORMAT', self.events())
                 self.assertNotIn('MKFS', self.events())
                 self.assertFalse((self.state / 'luks.started').exists())
+
+    def test_confirmed_fresh_initialization_clears_old_ext4_once_then_preserves_new_headers(self):
+        result = self.run_resume(CLEAR_APPROVAL='1', PART_SIGNATURE='ext4', PART_STATUS='0', WIPE_SIGNATURE='ext4')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.events().count('WIPE_OLD'), 1)
+        self.assertTrue((self.state / 'partition-clear.done').exists())
+        result = self.run_resume()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.events().count('WIPE_OLD'), 1)
+        self.assertEqual(self.events().count('CRYPT_FORMAT'), 1)
+
+    def test_signature_clear_intent_can_retry_before_luks_but_not_after_own_format_attempt(self):
+        result = self.run_resume(CLEAR_APPROVAL='1', PART_SIGNATURE='ext4', PART_STATUS='0', CLEAR_WRITE_FAIL='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.state / 'partition-clear.started').exists())
+        self.assertFalse((self.state / 'luks.started').exists())
+        result = self.run_resume(PART_SIGNATURE='ext4', PART_STATUS='0', LUKS_FORMAT_FAIL='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.state / 'luks.started').exists())
+        before = self.events().count('WIPE_OLD')
+        result = self.run_resume()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.events().count('WIPE_OLD'), before)
+        self.assertEqual(self.events().count('CRYPT_FORMAT'), 1)
+
+    def test_signature_clearing_rejects_changed_approval_migration_and_mount_errors(self):
+        self.run_resume(CLEAR_APPROVAL='1', CLEAR_WRITE_FAIL='1')
+        before = self.events().count('WIPE_OLD')
+        (self.state / 'migration.done').write_text('changed migration receipt')
+        result = self.run_resume()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.events().count('WIPE_OLD'), before)
+        self.assertIn('approval differs', result.stderr)
+        (self.state / 'migration.done').write_text('verified migration fixture\n')
+        result = self.run_resume(MOUNT_SCAN_FAIL='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.events().count('WIPE_OLD'), before)
+
+    def test_actual_old_ext4_signature_is_cleared_with_backup(self):
+        tools = {name: shutil.which(name, path=os.environ.get('PATH', '') + ':/usr/sbin:/sbin')
+                 for name in ('mkfs.ext4', 'wipefs', 'blkid')}
+        if not all(tools.values()):
+            self.skipTest('requires ext4 and util-linux inspectors')
+        image = self.root / 'old-ext4'
+        with image.open('wb') as stream:
+            stream.truncate(32 * 1024 * 1024)
+        subprocess.run([tools['mkfs.ext4'], '-F', '-q', str(image)], check=True, capture_output=True)
+        names = ('extra_probe_type', 'extra_require_blank', 'extra_clear_binding',
+                 'extra_write_clear_record', 'extra_clear_previous_partition_signatures')
+        script = ('set -Eeuo pipefail\nSTATE=' + shlex.quote(str(self.state)) + '\n'
+                  + 'EXTRA_PART=' + shlex.quote(str(image)) + '\n'
+                  + "EXTRA_PART_UUID=11111111-1111-1111-1111-111111111111\n"
+                  + 'fail() { echo "$*" >&2; exit 19; }\n'
+                  + 'extra_verify_partition_receipt() { :; }\nextra_check_mounts() { :; }\n'
+                  + 'lsblk() { echo "$EXTRA_PART"; }\n'
+                  + 'wipefs() { ' + shlex.quote(tools['wipefs']) + ' "$@"; }\n'
+                  + 'blkid() { ' + shlex.quote(tools['blkid']) + ' "$@"; }\n'
+                  + ''.join(function(name) for name in names)
+                  + '\nextra_write_clear_record partition-clear.approved\nextra_clear_previous_partition_signatures\n')
+        result = subprocess.run(['bash', '-c', script], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(subprocess.check_output([tools['wipefs'], '--no-act', '--noheadings', '--output', 'TYPE', str(image)], text=True), '')
+        self.assertTrue(list((self.state / 'signature-backups').iterdir()))
+        self.assertTrue((self.state / 'partition-clear.done').exists())
 
     def test_mapping_probe_failure_never_creates_filesystem(self):
         (self.state / 'header').touch()

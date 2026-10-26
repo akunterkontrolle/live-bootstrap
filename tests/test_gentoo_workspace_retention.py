@@ -90,6 +90,59 @@ stat() {{
         self.assertEqual((self.state / 'migration.started').read_text(), 'old interrupted full copy\n')
         self.migrate()
 
+    def test_explicit_bootstrap_root_scope_omits_os_special_files_and_preserves_receipts(self):
+        (self.source / 'steps').mkdir()
+        (self.source / 'steps/bootstrap.cfg').write_text('GENTOO_BOOTSTRAP=True\nDISK=sda1\n')
+        (self.source / 'init').write_text('#!/bin/bash\n')
+        (self.source / 'dev').mkdir()
+        os.mkfifo(self.source / 'dev/fifo')
+        (self.source / 'usr').mkdir()
+        (self.source / 'usr/old-bootstrap').write_text('not needed for installed continuation')
+        # Existing v1 retains unknown files and therefore refuses the special node.
+        with self.assertRaisesRegex(ValueError, 'special file'):
+            retention.fingerprint(self.source)
+        (self.root / 'state/gentoo-bootstrap').mkdir()
+        with self.assertRaisesRegex(ValueError, 'bootstrap markers'):
+            retention.fingerprint(self.root / 'state', bootstrap_root=True)
+        script = self.shell + 'PROFILE=hardware\nselect_migration_policy installed-bootstrap-root-v1\ncopy_and_verify_migration\nvalidate_home_migration\n'
+        result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        staged = self.root / 'migration/installed-bootstrap-root-v1/data'
+        self.assertEqual([p.name for p in staged.iterdir()], ['gentoo-bootstrap'])
+        self.assertTrue((staged / 'gentoo-bootstrap/inputs/file').exists())
+        self.assertFalse((staged / 'gentoo-bootstrap/build').exists())
+        self.assertEqual(retention.fingerprint(self.source, bootstrap_root=True),
+                         retention.fingerprint(staged, strict=True, bootstrap_root=True))
+        self.assertTrue((self.source / 'dev/fifo').exists())
+        self.assertEqual((self.legacy / 'preserve').read_text(), 'old failed copy\n')
+        self.assertEqual((self.state / 'active-migration').read_text(), 'installed-bootstrap-root-v1\n')
+        # Out-of-scope OS changes do not alter the selected source snapshot.
+        (self.source / 'usr/old-bootstrap').write_text('changed disposable root tree')
+        result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # In-scope provenance changes remain fatal.
+        (self.bootstrap / 'inputs/file').write_text('changed input')
+        result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('retained source changed', result.stderr)
+
+    def test_scope_switch_preserves_previous_selected_data_and_refuses_started_initialization(self):
+        self.migrate()
+        old_file = self.selected / 'operator-data'
+        for name, text in [('init', '#!/bin/bash\n'), ('steps/bootstrap.cfg', 'GENTOO_BOOTSTRAP=True\n')]:
+            path = self.source / name
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(text)
+        command = ('PROFILE=hardware\nuse_selected_migration\n'
+                   'select_migration_policy installed-bootstrap-root-v1\ncopy_and_verify_migration\n')
+        result = self.run_shell(command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(old_file.read_text(), 'keep unknown files\n')
+        (self.state / 'installed-continuation-v1/initialize.started').write_text('started\n')
+        result = self.run_shell('PROFILE=hardware\nuse_selected_migration\nselect_migration_policy installed-bootstrap-root-v1\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cannot switch scope', result.stderr)
+
     def test_changed_omitted_output_does_not_block_but_changed_retained_file_does(self):
         self.migrate()
         (self.bootstrap / 'build/file').unlink()  # Break the cross-boundary hard link first.

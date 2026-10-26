@@ -21,17 +21,36 @@ POLICY = json.dumps({'name': POLICY_NAME, 'omit': OMIT, 'unknown': 'retain',
                      'bootstrap-resume': False}, sort_keys=True, separators=(',', ':')) + '\n'
 
 
-def entries(root, strict=False):
+BOOTSTRAP_POLICY_NAME = 'installed-bootstrap-root-v1'
+BOOTSTRAP_POLICY = json.dumps({'name': BOOTSTRAP_POLICY_NAME, 'omit': OMIT,
+                              'include-root': ['gentoo-bootstrap'],
+                              'unknown-inside-bootstrap': 'retain',
+                              'outside-bootstrap': 'exclude',
+                              'bootstrap-resume': False}, sort_keys=True, separators=(',', ':')) + '\n'
+
+
+def entries(root, strict=False, bootstrap_root=False):
     root = root.resolve(strict=True)
     bootstrap = root / 'gentoo-bootstrap'
     if bootstrap.is_symlink() or not bootstrap.is_dir():
         raise ValueError('expected a real gentoo-bootstrap directory')
+    if bootstrap_root and not strict:
+        for name in ('init', 'steps/bootstrap.cfg'):
+            marker = root / name
+            if not marker.is_file() or marker.is_symlink():
+                raise ValueError('bootstrap-root scope requires original bootstrap markers: ' + name)
+        if 'GENTOO_BOOTSTRAP=True' not in (root / 'steps/bootstrap.cfg').read_text().splitlines():
+            raise ValueError('bootstrap configuration lacks the Gentoo continuation selection')
     device = root.stat().st_dev
     stack = [root]
     while stack:
         directory = stack.pop()
         for path in sorted(directory.iterdir()):
             relative = path.relative_to(root).as_posix()
+            if bootstrap_root and directory == root and relative != 'gentoo-bootstrap':
+                if strict:
+                    raise ValueError('out-of-scope path unexpectedly present in staging: ' + relative)
+                continue
             info = path.lstat()
             if relative in OMIT:
                 if strict:
@@ -49,10 +68,10 @@ def entries(root, strict=False):
                 stack.append(path)
 
 
-def fingerprint(root, strict=False):
+def fingerprint(root, strict=False, bootstrap_root=False):
     result = []
     hardlinks = {}
-    for path, relative, info in entries(root, strict):
+    for path, relative, info in entries(root, strict, bootstrap_root):
         record = {'path': relative, 'mode': stat.S_IMODE(info.st_mode),
                   'uid': info.st_uid, 'gid': info.st_gid, 'mtime_ns': info.st_mtime_ns}
         if stat.S_ISREG(info.st_mode):
@@ -81,10 +100,10 @@ def fingerprint(root, strict=False):
                       sort_keys=True, separators=(',', ':')) + '\n'
 
 
-def allocated(root):
+def allocated(root, bootstrap_root=False):
     seen = set()
     total = 0
-    for _, _, info in entries(root):
+    for _, _, info in entries(root, bootstrap_root=bootstrap_root):
         identity = info.st_dev, info.st_ino
         if identity not in seen:
             total += info.st_blocks * 512
@@ -114,24 +133,30 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('policy', 'excludes', 'bytes', 'report', 'snapshot', 'installed'))
     parser.add_argument('source', nargs='?', type=Path)
+    parser.add_argument('--bootstrap-root', action='store_true', help='retain only gentoo-bootstrap from an original bootstrap root; other root files require a separate backup')
     parser.add_argument('--strict', action='store_true', help='reject excluded paths in staging')
     args = parser.parse_args()
     if args.command == 'policy':
-        print(POLICY, end='')
+        print(BOOTSTRAP_POLICY if args.bootstrap_root else POLICY, end='')
     elif args.command == 'installed':
         check_installed(args.source or Path('/'))
     elif args.command == 'excludes':
         print('\n'.join('/' + name + '/***' for name in OMIT))
+        if args.bootstrap_root:
+            print('INCLUDE:/gentoo-bootstrap/***')
+            print('/*')
     else:
         if args.source is None:
             parser.error('source is required')
         if args.command == 'snapshot':
-            print(fingerprint(args.source, args.strict), end='')
+            print(fingerprint(args.source, args.strict, args.bootstrap_root), end='')
         elif args.command == 'bytes':
-            print(allocated(args.source))
+            print(allocated(args.source, args.bootstrap_root))
         else:
-            print('Policy:', POLICY_NAME)
-            print('Retained allocated bytes:', allocated(args.source))
+            print('Policy:', BOOTSTRAP_POLICY_NAME if args.bootstrap_root else POLICY_NAME)
+            if args.bootstrap_root:
+                print('Explicit scope: gentoo-bootstrap only. All other bootstrap root data is excluded; preserve a separate backup.')
+            print('Retained allocated bytes:', allocated(args.source, args.bootstrap_root))
             print('Retain: inputs, receipts, logs, handoff, artifacts, source archives and unclassified files outside the omitted work directories.')
             print('Omit managed bootstrap directories:')
             for name in OMIT:

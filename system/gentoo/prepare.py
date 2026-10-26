@@ -13,6 +13,7 @@ from lib.gentoo_config import load, render, root_image_gib
 
 # Extend this list in the batch that adds each runtime artifact.
 BUNDLE_FILES = (
+    'lib/installer-erase.sh', 'installed-grub.py', 'installed-update.py',
     'configure-installed-portage.py', 'configure-user-runtime.py',
     'bootstrap-resume.sh', 'lib/handoff.sh', 'lib/hardware-discovery.sh',
     'source-only-emerge.py', 'source-only-emerge.sh', 'cpu-policy.py', 'lib/cpu-policy.sh',
