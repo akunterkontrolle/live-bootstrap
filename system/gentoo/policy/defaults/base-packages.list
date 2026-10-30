@@ -11,6 +11,7 @@ net-misc/dhcpcd
 net-misc/networkmanager
 net-misc/rsync
 net-wireless/iw
+net-wireless/wireless-regdb
 net-wireless/wpa_supplicant
 =sys-kernel/linux-firmware-20260916
 sys-apps/hdparm
