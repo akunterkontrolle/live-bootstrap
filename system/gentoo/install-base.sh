@@ -351,9 +351,13 @@ copy_continuation_bundle() {
     ln -sfn "/usr/local/share/gentoo-continuation/inputs/$digest/gentoo.sh" "$TARGET_ROOT/usr/local/sbin/gentoo-continue"
     ln -sfn "/usr/local/share/gentoo-continuation/inputs/$digest/install-base.sh" "$TARGET_ROOT/usr/local/sbin/gentoo-install-base"
     install -d -m 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo" "$TARGET_ROOT/usr/local/sbin"
-    for name in signed-generation.py generation.py generation.example.toml GENERATIONS.md DESKTOP.md signed-generation.example.toml SIGNED-GENERATIONS.md; do
+    for name in hibernate.py hibernate-hook.sh hibernate-sleep.conf HIBERNATION.md signed-generation.py generation.py generation.example.toml GENERATIONS.md DESKTOP.md signed-generation.example.toml SIGNED-GENERATIONS.md; do
         install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name.tmp"
         mv "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name.tmp" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
+    done
+    mkdir -p "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/dracut-ms1504-resume-guard"
+    for name in module-setup.sh check-generation.sh resume-lib.sh; do
+        install -m 0644 "$SCRIPT_DIR/dracut-ms1504-resume-guard/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/dracut-ms1504-resume-guard/$name"
     done
     chmod 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/signed-generation.py" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/generation.py"
     ln -sfn /usr/local/share/ms1504-bootstrap/gentoo/generation.py "$TARGET_ROOT/usr/local/sbin/ms1504-generation"
@@ -489,8 +493,9 @@ install_root() {
     install -d -m 0755 "$resume_guard"
     install -m 0644 "$SCRIPT_DIR/dracut-ms1504-resume-guard/module-setup.sh" "$resume_guard/module-setup.sh"
     install -m 0644 "$SCRIPT_DIR/dracut-ms1504-resume-guard/check-generation.sh" "$resume_guard/check-generation.sh"
+    install -m 0644 "$SCRIPT_DIR/dracut-ms1504-resume-guard/resume-lib.sh" "$resume_guard/resume-lib.sh"
     target_run depmod -a "$module_release"
-    target_run dracut --force --no-hostonly --kver "$module_release" --add 'crypt lvm resume ms1504-resume-guard' "/boot/initramfs-$module_release.img" "$module_release"
+    target_run dracut --force --no-hostonly --kver "$module_release" --omit resume --add 'crypt lvm ms1504-resume-guard' "/boot/initramfs-$module_release.img" "$module_release"
     [ -s "$TARGET_ROOT/boot/initramfs-$module_release.img" ] || fail 'dracut did not create initramfs.'
     target_run locale-gen; target_run env-update
     for service in NetworkManager sysklogd; do

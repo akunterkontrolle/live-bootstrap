@@ -24,7 +24,10 @@ EXTRA_LOCK = Path('/var/lib/ms1504-extra/lock')
 DESKTOP_LOCK = Path('/run/lock/ms1504-complete-desktop.lock')
 GENERATION_LOCK = Path('/run/ms1504-generations/lock')
 DESKTOP_STATE = Path('/var/lib/ms1504-gentoo/desktop')
-REQUIRED = ('lib/installer-erase.sh', 'installed-grub.py', 'installed-update.py', 'setup-extra.sh', 'workspace-retention.py',
+REQUIRED = ('hibernate.py', 'hibernate-hook.sh', 'hibernate-sleep.conf', 'HIBERNATION.md',
+            'dracut-ms1504-resume-guard/resume-lib.sh',
+            'dracut-ms1504-resume-guard/module-setup.sh', 'dracut-ms1504-resume-guard/check-generation.sh',
+            'lib/installer-erase.sh', 'installed-grub.py', 'installed-update.py', 'setup-extra.sh', 'workspace-retention.py',
             'generation.py', 'signed-generation.py', 'generation.example.toml', 'GENERATIONS.md', 'probes/generation-lvm.py',
             'complete-desktop.sh', 'desktop-packages.list', 'desktop-package.use',
             'desktop-package.accept_keywords', 'desktop-package.mask', 'desktop-rust-bootstrap.py',

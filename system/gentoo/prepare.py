@@ -26,6 +26,8 @@ BUNDLE_FILES = (
     'signed-generation.example.toml', 'SIGNED-GENERATIONS.md',
     'install-signed-generation-tools.sh', 'export-boot-signing-key.sh',
     'harden-libreboot-payload.sh', 'firmware-build-receipt.sh', 'firmware-flash.sh',
+    'hibernate.py', 'hibernate-hook.sh', 'hibernate-sleep.conf', 'HIBERNATION.md',
+    'dracut-ms1504-resume-guard/resume-lib.sh',
     'dracut-ms1504-resume-guard/module-setup.sh',
     'dracut-ms1504-resume-guard/check-generation.sh',
     'setup-extra.sh', 'workspace-retention.py', 'complete-desktop.sh', 'desktop-packages.list',

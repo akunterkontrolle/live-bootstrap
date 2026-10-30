@@ -345,7 +345,11 @@ def make_menu(cfg: dict, current: str, snapshots: list[dict[str, str]] | str | N
         cmdline = list(base_cmdline) if base_cmdline is not None else Path("/etc/kernel/cmdline").read_text().split()
         need(all(re.fullmatch(r"[A-Za-z0-9=._:/,+-]+", token) for token in cmdline),
              "kernel command line contains a token unsafe for a GRUB menu")
-        cmdline = [x for x in cmdline if not x.startswith(("root=", "rd.lvm.lv=", "ms1504.generation="))]
+        cmdline = [x for x in cmdline if x != "noresume" and not x.startswith(("root=", "rd.lvm.lv=", "ms1504.generation="))]
+        # Old retained initramfs images can contain unguarded stock dracut
+        # resume rules. Disable those paths even before their own guard runs.
+        if lv != cfg['system']['root_lv']:
+            cmdline.append('noresume')
         cmdline += [f"root={root}", f"rd.lvm.lv={cfg['vg']}/{lv}",
                     f"rd.lvm.lv={cfg['vg']}/{cfg['system']['home_lv']}",
                     f"rd.lvm.lv={cfg['vg']}/{cfg['system']['swap_lv']}",
@@ -837,6 +841,15 @@ def command_run(cfg: dict, args: argparse.Namespace) -> None:
             signal.signal(sig, handler)
 
 
+def hibernation_guard(cfg: dict) -> None:
+    marker = Path("/home/.ms1504-hibernate/hibernation-pending")
+    need(not marker.exists() and not marker.is_symlink(),
+         "resolve pending hibernation state before changing generations")
+    swap = f"/dev/{cfg['vg']}/{cfg['system']['swap_lv']}"
+    need(run(["blkid", "-p", "-s", "TYPE", "-o", "value", swap]).decode().strip() == "swap",
+         "encrypted swap contains a hibernation image or unknown signature")
+
+
 def command_status(cfg: dict) -> None:
     root = Path("/etc/ms1504-generation")
     print(f"boot_policy={cfg.get('policy', 'signed')} (firmware enforcement is a separate hardware acceptance)")
@@ -1147,6 +1160,8 @@ def main(*, default_config: Path | None = None, require_signed: bool = True) -> 
             state.mkdir(parents=True, exist_ok=True, mode=0o700)
             need(state.stat().st_uid == 0 and not state.stat().st_mode & 0o022,
                  "generation state must be root-owned and protected")
+        if args.action not in ("status", "verify-running", "check-pending", "merge-rollback"):
+            hibernation_guard(cfg)
         if args.action == "status":
             command_status(cfg)
         elif args.action == "verify-running":

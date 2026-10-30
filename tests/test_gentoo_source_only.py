@@ -10,6 +10,8 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import fcntl
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +20,56 @@ spec = importlib.util.spec_from_file_location('source_only', GENTOO / 'source-on
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 SOURCE = os.environ.get('GENTOO_TEST_PORTAGE_SOURCE')
+
+
+class GenerationLockTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.config = self.root / 'config.toml'
+        self.config.write_text('[system]\nvolume_group="vg"\nswap_lv="swap"\n')
+        self.lock = self.root / 'run/lock'
+        self.marker = self.root / 'hibernation-pending'
+        real_lstat = Path.lstat
+        def lstat(path):
+            if path == self.lock.parent:
+                return SimpleNamespace(st_mode=0o40700, st_uid=0)
+            return real_lstat(path)
+        for p in [patch.object(guard.os, 'geteuid', return_value=0),
+                  patch.object(Path, 'lstat', lstat),
+                  patch.object(guard.subprocess, 'check_output', return_value=b'swap\n')]:
+            p.start(); self.addCleanup(p.stop)
+
+    def scope(self):
+        return guard.generation_lock(self.config, self.lock, self.marker)
+
+    def test_package_operation_excludes_hibernation_for_its_whole_lifetime(self):
+        with self.scope():
+            with self.lock.open('r+') as other:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with self.lock.open('r+') as other:
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_marker_and_untracked_image_refuse_before_package_execution(self):
+        self.marker.write_text('generation=old\n')
+        with self.assertRaisesRegex(ValueError, 'pending hibernation'), self.scope():
+            self.fail('entered a blocked package operation')
+        self.marker.unlink()
+        with patch.object(guard.subprocess, 'check_output', return_value=b'swsuspend\n'):
+            with self.assertRaisesRegex(ValueError, 'hibernation image'), self.scope():
+                self.fail('entered a blocked package operation')
+
+    def test_dangling_marker_symlink_is_not_treated_as_missing(self):
+        self.marker.symlink_to(self.root / 'missing')
+        with self.assertRaisesRegex(ValueError, 'pending hibernation'), self.scope():
+            self.fail('entered a blocked package operation')
+
+    def test_bootstrap_without_installed_configuration_needs_no_generation_lock(self):
+        self.config.unlink()
+        with self.scope():
+            self.assertFalse(self.lock.exists())
 
 
 class EmptyCacheTests(unittest.TestCase):
@@ -69,6 +121,11 @@ class PinnedPortagePolicyTests(unittest.TestCase):
         cls.loader = staticmethod(BinRepoConfigLoader)
 
     def setUp(self):
+        # These fixtures exercise Portage, not the machine hosting the tests.
+        # The installed-system interlock is covered with real locks above.
+        interlock = patch.object(guard, 'generation_lock', side_effect=contextlib.nullcontext)
+        interlock.start()
+        self.addCleanup(interlock.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)

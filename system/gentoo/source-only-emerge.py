@@ -3,11 +3,15 @@
 """Use pinned Portage's parser and effective settings before and after emerge."""
 import os
 import configparser
+import contextlib
+import fcntl
 from pathlib import Path
 import shlex
+import re
 import stat
 import subprocess
 import sys
+import tomllib
 
 BINARY_OPTIONS = {'--usepkg', '--usepkgonly', '--getbinpkg', '--getbinpkgonly',
                   '--buildpkg', '--buildpkgonly', '--quickpkg-direct',
@@ -87,11 +91,50 @@ def emerge_command(emerge):
     return [emerge] if binary else [sys.executable, emerge]
 
 
+@contextlib.contextmanager
+def generation_lock(config=Path('/etc/ms1504-generation.toml'),
+                    lock=Path('/run/ms1504-generations/lock'),
+                    marker=Path('/home/.ms1504-hibernate/hibernation-pending')):
+    # Bootstrap/chroot callers have no installed generation configuration.
+    # Non-root queries cannot mutate packages and need no privileged lock.
+    if os.geteuid() != 0 or not config.exists():
+        yield
+        return
+    lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = lock.parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise ValueError('unsafe installed generation lock directory')
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        if marker.exists() or marker.is_symlink():
+            raise ValueError('resolve pending hibernation state before running emerge')
+        system = tomllib.loads(config.read_text()).get('system', {})
+        if not isinstance(system, dict):
+            raise ValueError('invalid installed generation configuration')
+        names = [system.get('volume_group'), system.get('swap_lv')]
+        if not all(isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9+_.-]+', name) for name in names):
+            raise ValueError('invalid installed swap identity')
+        try:
+            probe = subprocess.check_output(['blkid', '-p', '-s', 'TYPE', '-o', 'value', '/dev/' + '/'.join(names)], stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as exc:
+            raise ValueError('cannot verify installed encrypted swap before emerge') from exc
+        if probe.strip() != b'swap':
+            raise ValueError('resolve hibernation image or unknown swap before running emerge')
+        yield
+    finally:
+        os.close(fd)
+
+
 def run(emerge, arguments):
-    # Resolve a relative entry before leaving a potentially private home.
+    # Resolve before leaving a private directory, including for lock probes.
     emerge = os.path.abspath(emerge)
-    # Ebuild metadata subprocesses can run as portage and cannot traverse /root.
-    os.chdir("/")
+    os.chdir('/')
+    with generation_lock():
+        return _run(emerge, arguments)
+
+
+def _run(emerge, arguments):
     import portage
     from _emerge.main import parse_opts
     from portage.binrepo.config import BinRepoConfigLoader
