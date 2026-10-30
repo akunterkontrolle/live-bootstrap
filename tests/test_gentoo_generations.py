@@ -68,7 +68,7 @@ class GenerationTransactions(unittest.TestCase):
             (self.root / 'dev/ms1504' / name).touch()
             return b''
         if args[0] == 'vgs':
-            return str(100 * 1024**3).encode()
+            return f'{100 * 1024**3} {4 * 1024**2}'.encode()
         if args[0] == 'lvs':
             if 'origin' in args:
                 return b'root'
@@ -382,6 +382,80 @@ class GenerationTransactions(unittest.TestCase):
                 loaded = m.read_config()
         self.assertFalse(m.signed(loaded))
         self.assertNotIn('signing_fingerprint', loaded['boot'])
+
+    def test_auto_and_numeric_retention_configuration(self):
+        config = self.root / 'capacity.toml'
+        template = (GENTOO / 'generation.example.toml').read_text()
+        config.write_text(template)
+        config.chmod(0o600)
+        metadata = config.stat()
+        with patch.object(m, 'CONFIG', config), patch.object(type(config), 'stat', return_value=SimpleNamespace(st_mode=metadata.st_mode, st_uid=0)):
+            loaded = m.read_config()
+            self.assertEqual(loaded['snapshots']['retain_generations'], 'auto')
+            identity = loaded['system'] | {'profile': 'hardware', 'reserve_gib': '100'}
+            m.validate_root_identity(identity, loaded)
+            with self.assertRaisesRegex(RuntimeError, 'reserve'):
+                m.validate_root_identity(identity | {'reserve_gib': '31'}, loaded)
+            for value in ('3', '8'):
+                config.write_text(template.replace('retain_generations = "auto"', 'retain_generations = ' + value))
+                self.assertEqual(m.read_config()['snapshots']['retain_generations'], int(value))
+            for value in ('0', '-1', 'true', '1.5', '"other"'):
+                config.write_text(template.replace('retain_generations = "auto"', 'retain_generations = ' + value))
+                with self.assertRaisesRegex(RuntimeError, 'positive integer'):
+                    m.read_config()
+
+    def test_third_transaction_preserves_two_existing_checkpoints_and_stops_at_three(self):
+        self.cfg['snapshots']['retain_generations'] = 'auto'
+        self.initialize()
+        for generation in ('desktop-1', 'desktop-2', 'desktop-3'):
+            m.command_begin(self.cfg, self.args)
+            m.command_seal(self.cfg, SimpleNamespace(generation=generation, kernel=str(self.kernel), initramfs=str(self.initrd)))
+        self.assertEqual(set(self.lvs), {'root_rollback_base-1', 'root_rollback_desktop-1', 'root_rollback_desktop-2'})
+        with self.assertRaisesRegex(RuntimeError, 'no snapshot slot'):
+            m.command_begin(self.cfg, self.args)
+        self.assertEqual(len(self.lvs), 3)
+
+
+class SnapshotCapacity(unittest.TestCase):
+    def setUp(self):
+        self.gib = 1024**3
+        self.cfg = {'vg': 'vg', 'snapshots': {'size_gib': 32, 'retain_generations': 'auto'}}
+        self.rows = [{'snapshot': 'one'}, {'snapshot': 'two'}]
+        self.sizes = {'one': 32 * self.gib, 'two': 32 * self.gib}
+
+    def capacity(self, free=36, extent=None):
+        extent = extent if extent is not None else 4 * 1024**2
+        with patch.object(m, 'snapshot_health', side_effect=lambda cfg, name: (0, self.sizes[name])), \
+             patch.object(m, 'run', return_value=f'{free * self.gib} {extent}'.encode()):
+            return m.snapshot_capacity(self.cfg, self.rows, {'reserve_gib': '100'})
+
+    def test_auto_uses_the_lower_of_free_extents_and_remaining_reserve(self):
+        self.assertEqual(self.capacity()['additional_slots'], 1)
+        self.assertEqual(self.capacity()['allowed_slots'], 3)
+        self.assertEqual(self.capacity(free=31)['additional_slots'], 0)
+        self.assertEqual(self.capacity(free=1000)['allowed_slots'], 3)
+
+    def test_grown_cow_allocation_is_counted_even_when_almost_empty(self):
+        self.sizes['one'] = 48 * self.gib
+        self.assertEqual(self.capacity()['allocated_bytes'], 80 * self.gib)
+        self.assertEqual(self.capacity()['additional_slots'], 0)
+
+    def test_optional_explicit_limit_remains_a_ceiling(self):
+        self.cfg['snapshots']['retain_generations'] = 2
+        self.assertEqual(self.capacity()['additional_slots'], 0)
+
+    def test_rounding_to_physical_extents_is_included(self):
+        self.cfg['snapshots']['size_gib'] = 25
+        result = self.capacity(free=31, extent=16 * self.gib)
+        self.assertEqual(result['next_snapshot_bytes'], 32 * self.gib)
+        self.assertEqual(result['additional_slots'], 0)
+        self.assertEqual(self.capacity(free=32, extent=16 * self.gib)['additional_slots'], 1)
+
+    def test_invalid_lvm_report_fails_closed(self):
+        for report in (b'unknown 4194304', b'1', b'1 0'):
+            with self.subTest(report=report), patch.object(m, 'snapshot_health', return_value=(0, 32 * self.gib)), \
+                 patch.object(m, 'run', return_value=report), self.assertRaises(RuntimeError):
+                m.snapshot_capacity(self.cfg, self.rows, {'reserve_gib': '100'})
 
 
 if __name__ == '__main__':

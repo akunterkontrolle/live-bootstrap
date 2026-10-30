@@ -14,7 +14,8 @@ signing_fingerprint = ""
 [snapshots]
 size_gib = 32
 maximum_data_percent = 80
-retain_generations = 2
+# Capacity follows the reserved budget and free LVM extents; never auto-prune.
+retain_generations = "auto"
 
 [state]
 directory = "/var/lib/ms1504-generations"

@@ -119,11 +119,13 @@ def read_config() -> dict:
     config["state_dir"] = Path(config["state"]["directory"])
     config["boot_dir"] = Path(config["boot"]["directory"])
     config["public_key"] = Path(config["boot"].get("public_key", "/etc/ms1504-boot/boot.key"))
-    for key, minimum, maximum in (("size_gib", 1, 96), ("maximum_data_percent", 1, 99),
-                                 ("retain_generations", 1, 2)):
+    for key, minimum, maximum in (("size_gib", 1, 96), ("maximum_data_percent", 1, 99)):
         value = config["snapshots"].get(key)
         need(type(value) is int and minimum <= value <= maximum,
              f"[snapshots].{key} must be an integer from {minimum} to {maximum}")
+    retention = config['snapshots']['retain_generations']
+    need(retention == 'auto' or (type(retention) is int and retention > 0),
+         '[snapshots].retain_generations must be "auto" or a positive integer')
     for path in (config["boot_dir"], config["state_dir"], config["public_key"]):
         need(path.is_absolute(), "boot, state, and public-key paths must be absolute")
     need(config["state_dir"] not in (Path("/"), Path("/boot")) and
@@ -159,8 +161,10 @@ def validate_root_identity(result: dict[str, str], cfg: dict) -> dict[str, str]:
          result.get("swap_lv") == cfg["system"]["swap_lv"],
          "configured LVM layout differs from the installed root identity")
     reserve = result.get("reserve_gib", "")
+    retention = cfg['snapshots']['retain_generations']
+    minimum_slots = 1 if retention == 'auto' else retention
     need(reserve.isdecimal() and int(reserve) >=
-         cfg["snapshots"]["size_gib"] * cfg["snapshots"]["retain_generations"],
+         cfg["snapshots"]["size_gib"] * minimum_slots,
          "configured LVM reserve cannot hold the requested rollback generations")
     return result
 
@@ -560,6 +564,29 @@ def snapshot_rows(cfg: dict, *, enforce_threshold: bool = True) -> list[dict[str
     return rows
 
 
+def snapshot_capacity(cfg: dict, rows: list[dict[str, str]], identity: dict | None = None) -> dict:
+    """Use actual COW allocation, the reserved budget and currently free extents."""
+    identity = identity if identity is not None else read_root_identity(cfg)
+    reserve = int(identity['reserve_gib']) * 1024**3
+    allocated = sum(snapshot_health(cfg, row['snapshot'])[1] for row in rows)
+    values = run(['vgs', '--noheadings', '--units', 'b', '--nosuffix', '-o',
+                  'vg_free,vg_extent_size', cfg['vg']]).decode().split()
+    need(len(values) == 2 and all(value.isdecimal() for value in values),
+         'cannot inspect volume-group free space and extent size')
+    free, extent = map(int, values)
+    need(extent > 0, 'invalid volume-group extent size')
+    requested = cfg['snapshots']['size_gib'] * 1024**3
+    rounded = ((requested + extent - 1) // extent) * extent
+    available = min(free, max(0, reserve - allocated))
+    limit = len(rows) + available // rounded
+    retention = cfg['snapshots']['retain_generations']
+    if retention != 'auto':
+        limit = min(limit, retention)
+    return dict(retention=retention, retained=len(rows), allowed_slots=limit,
+                additional_slots=max(0, limit - len(rows)), reserve_bytes=reserve,
+                allocated_bytes=allocated, free_bytes=free, next_snapshot_bytes=rounded)
+
+
 def create_snapshot(cfg: dict, snapshot: str, size_gib: int) -> None:
     # device-mapper synchronizes/freezes the filesystem during snapshot creation.
     # An outer root fsfreeze can deadlock LVM archive/log writes on that root.
@@ -598,15 +625,10 @@ def command_begin(cfg: dict, args: argparse.Namespace) -> None:
              "pending snapshot size differs from the configured transaction")
     else:
         rows = snapshot_rows(cfg)
-        need(len(rows) < cfg["snapshots"]["retain_generations"],
-             "rollback retention is full; explicitly prune an old generation before another update")
-        reserve_bytes = int(identity["reserve_gib"]) * 1024**3
-        allocated = sum(int(row["size_bytes"]) for row in rows)
-        new_bytes = size * 1024**3
-        need(allocated + new_bytes <= reserve_bytes,
-             "configured snapshot reserve cannot cover existing and new COW allocations")
-        free_bytes = int(run(["vgs", "--noheadings", "--units", "b", "--nosuffix", "-o", "vg_free", cfg["vg"]]).decode().strip())
-        need(free_bytes >= new_bytes, "volume group has insufficient free extents for the snapshot")
+        capacity = snapshot_capacity(cfg, rows, identity)
+        need(capacity['additional_slots'] > 0,
+             'no snapshot slot available within the retention limit, reserved budget and free extents; '
+             'inspect status and explicitly prune or free space before another update')
         snapshot = f"{cfg['system']['root_lv']}_rollback_{marker}"
         need(not Path(f"/dev/{cfg['vg']}/{snapshot}").exists(), "unreceipted rollback LV exists; inspect before proceeding")
         pending.mkdir(parents=True, mode=0o700)
@@ -887,6 +909,9 @@ def command_status(cfg: dict) -> None:
             problems.append(str(exc))
             status = f"REQUIRES_INSPECTION {exc}"
         print(f"rollback={row.get('old', '?')} snapshot={snapshot} {status}")
+    if not problems:
+        capacity = snapshot_capacity(cfg, rows)
+        print('snapshot_capacity: ' + ' '.join(f'{key}={value}' for key, value in capacity.items()))
     need(not problems, "; ".join(problems))
 
 
