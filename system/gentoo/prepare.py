@@ -23,6 +23,8 @@ BUNDLE_FILES = (
     'lib/installer-filesystems.sh', 'retire-bootstrap-nscd.py',
     'gentoo.sh', 'console-session.py', 'bootstrap-network.py', 'install-base.sh', 'lib/common.sh', 'lib/devices.sh', 'lib/storage.sh', 'lib/state.sh',
     'signed-generation.py', 'generation.py', 'generation.example.toml', 'GENERATIONS.md', 'probes/generation-lvm.py',
+    'generation_transition.py', 'generation_recovery.py', 'GENERATION-TRANSITIONS.md',
+    'dracut-ms1504-rollback/module-setup.sh', 'dracut-ms1504-rollback/recover.sh',
     'signed-generation.example.toml', 'SIGNED-GENERATIONS.md',
     'install-signed-generation-tools.sh', 'export-boot-signing-key.sh',
     'harden-libreboot-payload.sh', 'firmware-build-receipt.sh', 'firmware-flash.sh',

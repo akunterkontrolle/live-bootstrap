@@ -351,9 +351,13 @@ copy_continuation_bundle() {
     ln -sfn "/usr/local/share/gentoo-continuation/inputs/$digest/gentoo.sh" "$TARGET_ROOT/usr/local/sbin/gentoo-continue"
     ln -sfn "/usr/local/share/gentoo-continuation/inputs/$digest/install-base.sh" "$TARGET_ROOT/usr/local/sbin/gentoo-install-base"
     install -d -m 0755 "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo" "$TARGET_ROOT/usr/local/sbin"
-    for name in hibernate.py hibernate-hook.sh hibernate-sleep.conf HIBERNATION.md signed-generation.py generation.py generation.example.toml GENERATIONS.md DESKTOP.md signed-generation.example.toml SIGNED-GENERATIONS.md; do
+    for name in hibernate.py hibernate-hook.sh hibernate-sleep.conf HIBERNATION.md signed-generation.py generation.py generation_transition.py generation_recovery.py GENERATION-TRANSITIONS.md generation.example.toml GENERATIONS.md DESKTOP.md signed-generation.example.toml SIGNED-GENERATIONS.md; do
         install -m 0644 "$SCRIPT_DIR/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name.tmp"
         mv "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name.tmp" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/$name"
+    done
+    mkdir -p "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/dracut-ms1504-rollback"
+    for name in module-setup.sh recover.sh; do
+        install -m 0644 "$SCRIPT_DIR/dracut-ms1504-rollback/$name" "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/dracut-ms1504-rollback/$name"
     done
     mkdir -p "$TARGET_ROOT/usr/local/share/ms1504-bootstrap/gentoo/dracut-ms1504-resume-guard"
     for name in module-setup.sh check-generation.sh resume-lib.sh; do

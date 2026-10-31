@@ -29,6 +29,8 @@ REQUIRED = ('hibernate.py', 'hibernate-hook.sh', 'hibernate-sleep.conf', 'HIBERN
             'dracut-ms1504-resume-guard/module-setup.sh', 'dracut-ms1504-resume-guard/check-generation.sh',
             'lib/installer-erase.sh', 'installed-grub.py', 'installed-update.py', 'setup-extra.sh', 'workspace-retention.py',
             'generation.py', 'signed-generation.py', 'generation.example.toml', 'GENERATIONS.md', 'probes/generation-lvm.py',
+            'generation_transition.py', 'generation_recovery.py', 'GENERATION-TRANSITIONS.md',
+            'dracut-ms1504-rollback/module-setup.sh', 'dracut-ms1504-rollback/recover.sh',
             'complete-desktop.sh', 'desktop-packages.list', 'desktop-package.use',
             'desktop-package.accept_keywords', 'desktop-package.mask', 'desktop-rust-bootstrap.py',
             'desktop-lightdm.conf', 'DESKTOP.md', 'desktop-settings.py', 'desktop-power.py', 'configure-user-runtime.py', 'source-only-emerge.py', 'cpu-policy.py',

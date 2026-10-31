@@ -109,7 +109,17 @@ def generation_lock(config=Path('/etc/ms1504-generation.toml'),
         fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         if marker.exists() or marker.is_symlink():
             raise ValueError('resolve pending hibernation state before running emerge')
-        system = tomllib.loads(config.read_text()).get('system', {})
+        configuration = tomllib.loads(config.read_text())
+        state = configuration.get('state', {}).get('directory', '/var/lib/ms1504-generations')
+        if not isinstance(state, str) or not os.path.isabs(state):
+            raise ValueError('invalid installed generation state path')
+        migration = Path(state) / 'signing-migration'
+        recovery = Path(state) / 'recovery-preparation.json'
+        if migration.exists() or migration.is_symlink():
+            raise ValueError('finish or abort signing migration before running emerge')
+        if recovery.exists() or recovery.is_symlink():
+            raise ValueError('finish internal recovery publication before running emerge')
+        system = configuration.get('system', {})
         if not isinstance(system, dict):
             raise ValueError('invalid installed generation configuration')
         names = [system.get('volume_group'), system.get('swap_lv')]

@@ -18,6 +18,8 @@ spec = spec_from_file_location('hibernate_generations', SOURCE / 'signed-generat
 m = module_from_spec(spec)
 spec.loader.exec_module(m)
 FILES = ('hibernate.py', 'signed-generation.py', 'generation.py', 'source-only-emerge.py', 'hibernate-hook.sh',
+         'generation_transition.py', 'generation_recovery.py',
+         'dracut-ms1504-rollback/module-setup.sh', 'dracut-ms1504-rollback/recover.sh',
          'hibernate-sleep.conf', 'dracut-ms1504-resume-guard/module-setup.sh',
          'dracut-ms1504-resume-guard/check-generation.sh', 'dracut-ms1504-resume-guard/resume-lib.sh')
 DRACUT = b'add_dracutmodules+=" crypt lvm ms1504-resume-guard "\nomit_dracutmodules+=" resume "\n'
@@ -61,6 +63,10 @@ class Hibernation:
                 m.need(key != 'HibernateByUsing' or not value, 'custom hibernate backend requires review')
 
     def context(self, installing=False):
+        m.need(not (self.cfg['state_dir'] / 'signing-migration').exists(),
+               'finish or abort signing preparation before hibernation')
+        m.need(not (self.cfg['state_dir'] / 'recovery-preparation.json').exists(),
+               'finish internal recovery publication before hibernation')
         m.root_is_live(self.cfg)
         m.read_root_identity(self.cfg)
         with contextlib.redirect_stdout(sys.stderr):

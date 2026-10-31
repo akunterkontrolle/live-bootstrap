@@ -245,6 +245,11 @@ class GenerationTransactions(unittest.TestCase):
 
     def offline_fixture(self):
         self.begin()
+        # The real recovery mount is root-owned. This fixture runs as the host
+        # user and models the privileged mount/LVM boundary separately.
+        protection = patch.object(m, 'protected_path')
+        protection.start()
+        self.addCleanup(protection.stop)
         receipt_dir = self.root / 'external'
         receipt_dir.mkdir()
         (self.root / 'proc/swaps').write_text('Filename Type Size Used Priority\n')
@@ -309,6 +314,33 @@ class GenerationTransactions(unittest.TestCase):
                 m.command_merge_rollback(cfg, args)
         confirm.assert_not_called()
         self.assertFalse(any(command[0] in ('umount', 'lvchange', 'lvconvert') for command in commands))
+
+    def test_offline_merge_preserves_ram_recovery_when_checkpoint_predates_it(self):
+        import json
+        import hashlib
+        cfg, args, fake_run, ismount = self.offline_fixture()
+        recovery = self.root / 'boot/ms1504-recovery'
+        ident = 'a' * 32
+        (recovery / ident).mkdir(parents=True)
+        content = {'vmlinuz': b'recovery kernel', 'initramfs.img': b'RAM recovery image'}
+        for name, data in content.items():
+            (recovery / ident / name).write_bytes(data)
+        descriptor = {'id': ident, 'cmdline': ['noresume', 'rd.ms1504.recovery=1'],
+                      'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in content.items()}}
+        (recovery / 'descriptor.json').write_text(json.dumps(descriptor))
+
+        def unmount_root(command, **kwargs):
+            if command[0] == 'umount' and '-R' in command and recovery.exists():
+                recovery.rename(self.root / 'unmounted-origin-recovery')
+            return fake_run(command, **kwargs)
+
+        with patch.object(m, 'run', side_effect=unmount_root), \
+                patch.object(m, 'current_root_source', return_value='/dev/rescue'), \
+                patch.object(m.os.path, 'ismount', side_effect=ismount), patch.object(m, 'confirm_tty'):
+            m.command_merge_rollback(cfg, args)
+        for name, data in content.items():
+            self.assertEqual((recovery / ident / name).read_bytes(), data)
+        self.assertTrue((self.root / 'external/merge-recovery-base-1/descriptor.json').exists())
 
     def test_verify_running_accepts_the_existing_mapper_alias(self):
         self.initialize()

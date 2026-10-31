@@ -71,6 +71,14 @@ class GenerationLockTests(unittest.TestCase):
         with self.scope():
             self.assertFalse(self.lock.exists())
 
+    def test_signing_preparation_blocks_package_changes_before_execution(self):
+        state = self.root / 'state'
+        (state / 'signing-migration').mkdir(parents=True)
+        with self.config.open('a') as stream:
+            stream.write('[state]\ndirectory=' + repr(str(state)) + '\n')
+        with self.assertRaisesRegex(ValueError, 'signing migration'), self.scope():
+            self.fail('package operation entered during signing preparation')
+
 
 class EmptyCacheTests(unittest.TestCase):
     def test_missing_or_empty_directories_pass_and_every_file_or_link_refuses(self):
