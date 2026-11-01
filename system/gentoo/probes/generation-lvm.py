@@ -11,7 +11,6 @@ import os
 import shutil
 import subprocess
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -86,9 +85,9 @@ class RealSnapshotLifecycle(unittest.TestCase):
                 lvm(['lvchange', '--activate', 'n', origin])
                 lvm(['lvconvert', '--merge', snapshot])
                 lvm(['lvchange', '--activate', 'y', origin])
-                deadline = time.monotonic() + 30
-                while Path(snapshot).exists() and time.monotonic() < deadline:
-                    time.sleep(.2)
+                with patch.object(m, 'run', side_effect=lvm):
+                    m.wait_snapshot_merge(cfg, 'root_rollback_base', '', timeout=30)
+                    self.assertNotIn('root_rollback_base', m.actual_root_snapshots(cfg))
                 self.assertFalse(Path(snapshot).exists(), 'snapshot merge did not finish')
                 run(['mount', origin, str(root)])
                 self.assertEqual((root / 'checkpoint').read_bytes(), b'before snapshot')

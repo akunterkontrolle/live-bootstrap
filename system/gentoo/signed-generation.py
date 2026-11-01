@@ -572,9 +572,46 @@ def snapshot_health(cfg: dict, snapshot: str) -> tuple[float, int]:
 
 
 def actual_root_snapshots(cfg: dict) -> set[str]:
-    listed = run(["lvs", "--noheadings", "-o", "lv_name,origin", cfg["vg"]]).decode().splitlines()
-    return {fields[0] for line in listed if len(fields := line.split()) == 2 and
+    listed = run(["lvs", "--all", "--noheadings", "-o", "lv_name,origin", cfg["vg"]]).decode().splitlines()
+    return {fields[0].strip('[]') for line in listed if len(fields := line.split()) == 2 and
             fields[1] == cfg["system"]["root_lv"]}
+
+
+def merge_report(cfg: dict) -> list[dict]:
+    report = json.loads(run(['lvs', '--all', '--reportformat', 'json', '-o',
+                             'lv_name,lv_uuid,lv_attr,lv_merging,origin', cfg['vg']]))
+    need(len(report['report']) == 1, 'ambiguous LVM merge report')
+    rows = report['report'][0]['lv']
+    need(isinstance(rows, list) and all(isinstance(row, dict) and
+         all(isinstance(row.get(key), str) for key in
+             ('lv_name', 'lv_uuid', 'lv_attr', 'lv_merging', 'origin')) for row in rows),
+         'malformed LVM merge report')
+    return rows
+
+
+def wait_snapshot_merge(cfg: dict, snapshot: str, snapshot_uuid: str, *, timeout: float = 86400) -> None:
+    """Wait for LVM metadata cleanup as well as kernel data restoration.
+
+    A merging snapshot is hidden and loses its /dev node before it is removed.
+    Explicit polling is necessary in an initramfs without a polling daemon.
+    """
+    origin = cfg['root']
+    print('Waiting for LVM merge and snapshot-allocation cleanup...', flush=True)
+    run(['lvchange', '--poll', 'y', origin])
+    deadline = time.monotonic() + timeout
+    while True:
+        rows = merge_report(cfg)
+        origins = [row for row in rows if row['lv_name'] == cfg['system']['root_lv']]
+        need(len(origins) == 1, 'origin missing or ambiguous during snapshot merge')
+        selected = [row for row in rows if row['lv_name'].strip('[]') == snapshot]
+        need(len(selected) <= 1 and (not selected or not snapshot_uuid or
+             selected[0]['lv_uuid'] == snapshot_uuid), 'snapshot UUID changed during merge')
+        merging = origins[0]['lv_merging'].strip() or origins[0]['lv_attr'].startswith('O')
+        if not selected and not merging:
+            return
+        need(time.monotonic() < deadline,
+             'snapshot merge or LVM cleanup did not complete; leave target offline and inspect durable receipts')
+        time.sleep(0.2)
 
 
 def snapshot_rows(cfg: dict, *, enforce_threshold: bool = True) -> list[dict[str, str]]:
@@ -1021,6 +1058,7 @@ def command_prune(cfg: dict, args: argparse.Namespace) -> None:
 
 
 def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
+    args.merge_started = False
     need(args.recovery_root, "merge-rollback requires --recovery-root pointing to the mounted target root")
     target = Path(args.recovery_root)
     need(target.is_dir() and (target / "etc/ms1504-root-identity").is_file(),
@@ -1137,9 +1175,11 @@ def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
         sign(proof, args, cfg)
         verify_signature(proof, args, cfg)
     confirmation = f"MERGE {fields['snapshot']} INTO {cfg['system']['root_lv']}"
-    confirm_tty("This permanently restores the selected root snapshot into the root LV.", confirmation)
+    confirm_tty(f"This permanently restores {fields['old']} ({fields['snapshot']}) into the root LV.",
+                'yes' if getattr(args, 'interactive_menu', False) else confirmation)
     atomic_write(merge_receipt,
                  f"generation={fields['old']}\nsnapshot={fields['snapshot']}\nstarted={datetime.now(timezone.utc).isoformat()}\n".encode(), 0o600)
+    args.merge_started = True
     # Persist all transaction inputs outside the root before changing LVM.
     atomic_write(receipt_dir / f"merge-transaction-{fields['old']}",
                  ("\n".join(f"{k}={v}" for k, v in fields.items()) + "\n").encode(), 0o600)
@@ -1158,14 +1198,8 @@ def command_merge_rollback(cfg: dict, args: argparse.Namespace) -> None:
     # Naming a snapshot explicitly instead prompts to change its origin.
     run(["lvchange", "--activate", "n", origin])
     run(["lvconvert", "--merge", snapshot])
-    if Path(snapshot).exists():
-        run(["lvchange", "--activate", "y", origin])
-        deadline = time.monotonic() + 24 * 60 * 60
-        while Path(snapshot).exists() and time.monotonic() < deadline:
-            time.sleep(2)
-        if Path(snapshot).exists():
-            raise RuntimeError("offline merge did not complete; leave target offline and inspect LVM")
     run(["lvchange", "--activate", "y", origin])
+    wait_snapshot_merge(cfg, fields['snapshot'], fields.get('snapshot_uuid', ''))
     need(not os.path.ismount(target), "recovery mountpoint unexpectedly remained mounted")
     run(["mount", "-t", "ext4", "-o", "rw", origin, str(target)])
     try:

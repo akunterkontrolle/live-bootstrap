@@ -70,6 +70,12 @@ class GenerationTransactions(unittest.TestCase):
         if args[0] == 'vgs':
             return f'{100 * 1024**3} {4 * 1024**2}'.encode()
         if args[0] == 'lvs':
+            if '--reportformat' in args:
+                import json
+                rows = [dict(lv_name='root', lv_uuid='root-uuid', lv_attr='owi-a-s---', lv_merging='', origin='')]
+                rows += [dict(lv_name=name, lv_uuid=value, lv_attr='swi-a-s---', lv_merging='', origin='root')
+                         for name, value in self.lvs.items()]
+                return json.dumps({'report': [{'lv': rows}]}).encode()
             if 'origin' in args:
                 return b'root'
             if args[-1] == 'ms1504':
@@ -282,7 +288,8 @@ class GenerationTransactions(unittest.TestCase):
             if command[0] == 'lvs' and 'lv_path' in command:
                 return b'/dev/ms1504/root /dev/ms1504/home /dev/ms1504/swap'
             if command[0] == 'lvchange':
-                self.assertEqual(command, ['lvchange', '--activate', command[2], '/dev/ms1504/root'])
+                self.assertIn(command[1], ('--activate', '--poll'))
+                self.assertEqual(command[-1], '/dev/ms1504/root')
                 self.assertFalse(mounted)
                 return b''
             if command[0] == 'lvconvert':

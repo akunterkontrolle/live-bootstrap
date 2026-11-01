@@ -1,5 +1,6 @@
 """Build and run an internal, RAM-resident offline recovery environment."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 from importlib.util import module_from_spec, spec_from_file_location
 import json
@@ -12,6 +13,35 @@ import subprocess
 import uuid
 
 SOURCE = Path(__file__).resolve().parent
+
+
+class RecoveryPendingError(RuntimeError):
+    """LVM may have changed; preserve receipts and require inspection."""
+
+
+@contextmanager
+def mounted(m, source, target, options='ro,noload', *, keep=None, unsafe=None):
+    """Own a verified recovery mount, including a matching stale prior mount."""
+    target.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if os.path.ismount(target):
+        actual = m.run(['findmnt', '-rn', '-M', str(target), '-o', 'SOURCE']).decode().strip()
+        kind = m.run(['findmnt', '-rn', '-M', str(target), '-o', 'FSTYPE']).decode().strip()
+        flags = m.run(['findmnt', '-rn', '-M', str(target), '-o', 'OPTIONS']).decode().strip().split(',')
+        m.need(os.path.realpath(actual) == os.path.realpath(source) and kind == 'ext4' and
+               ('ro' if 'ro' in options.split(',') else 'rw') in flags,
+               'unexpected existing recovery mount: ' + str(target))
+    else:
+        m.run(['mount', '-t', 'ext4', '-o', options, source, str(target)])
+    try:
+        yield target
+    finally:
+        if os.path.ismount(target) and not (keep and keep()):
+            try:
+                m.run(['umount', str(target)])
+            except Exception as exc:
+                if unsafe and unsafe():
+                    raise RecoveryPendingError('Mount cleanup failed after merge intent; inspect before retrying: ' + str(target)) from exc
+                raise
 
 
 def digest(path):
@@ -236,64 +266,147 @@ def publish_prepared(m, cfg, args, receipt, identity):
     print('No merge, reboot, firmware change or private-key copy was performed.')
 
 
-def offline(m, generation, *, base=Path('/etc/ms1504-offline'), signed_key=None):
+def recovery_config(m, base):
     m.need(Path('/etc/initrd-release').exists(), 'run internal recovery only inside the initramfs')
     m.need(Path('/proc/cmdline').read_text().split().count('rd.ms1504.recovery=1') == 1,
            'internal recovery boot argument is missing or duplicated')
-    m.need(m.NAME.fullmatch(generation), 'invalid generation name')
     m.CONFIG = base / 'config.toml'
     cfg = m.read_config()
     m.need(m.current_root_source() != os.path.realpath(cfg['root']), 'installed root is running')
-    storage = json.loads((base / 'storage.json').read_text())
-    target = Path('/run/ms1504-target')
-    receipts = Path('/run/ms1504-receipts')
-    home = Path('/run/ms1504-home-check')
-    for path in (target, receipts, home):
-        path.mkdir(mode=0o700, exist_ok=True)
-    # Preserve images and markers. Do not swapoff or erase anything implicitly.
-    m.need(m.run(['blkid', '-p', '-s', 'TYPE', '-o', 'value',
-                  f"/dev/{cfg['vg']}/{cfg['system']['swap_lv']}"]).decode().strip() == 'swap',
-           'hibernation image or unknown swap state; preserve it and stop')
-    m.run(['mount', '-t', 'ext4', '-o', 'ro,noload',
-           f"/dev/{cfg['vg']}/{cfg['system']['home_lv']}", str(home)])
-    try:
-        marker = home / '.ms1504-hibernate/hibernation-pending'
-        m.need(not marker.exists() and not marker.is_symlink(), 'resolve the persistent hibernation marker first')
-    finally:
-        m.run(['umount', str(home)])
-    m.run(['mount', '-t', 'ext4', '-o', 'ro', cfg['root'], str(target)])
-    # Load the current installed policy, never the possibly old policy captured
-    # when this recovery image was built. Copy into RAM before root is unmounted.
+    return cfg
+
+
+def active_config(m, target, base, cfg):
     actual = target / 'etc/ms1504-generation.toml'
     m.protected_path(actual)
     m.atomic_write(base / 'active-config.toml', actual.read_bytes(), 0o600)
     m.CONFIG = base / 'active-config.toml'
     active = m.read_config()
     m.need(active['system'] == cfg['system'], 'installed layout differs from recovery image')
-    filesystem = unlock_storage(m, target, storage)
-    verify_checkpoint_storage(m, target, active, generation)
-    m.run(['mount', '-t', 'ext4', filesystem, str(receipts)])
-    storage_identity(m, active, receipts)
-    m.need(m.run(['blkid', '-p', '-s', 'UUID', '-o', 'value', filesystem]).decode().strip() == storage['filesystem_uuid'],
-           'recovery filesystem differs')
-    if m.signed(active):
-        m.need(signed_key, 'signed recovery requires --secret-key-file on separately unlocked signing storage')
-        # Menu repair uses the root's public key; preserve it in RAM as well.
-        key = target / active['public_key'].relative_to('/')
-        m.atomic_write(base / 'boot.key', key.read_bytes())
-    args = argparse.Namespace(generation=generation, recovery_root=str(target), recovery_receipts=str(receipts),
-                              secret_key_file=signed_key, gnupg_home=None,
-                              installed_config='etc/ms1504-generation.toml')
-    # The normal manager owns the lock, validation, durable intent, exact
-    # confirmation, merge, menu repair and post-merge checks.
-    return m.command_merge_rollback(active, args)
+    return active
+
+
+def rollback_choices(m, *, base=Path('/etc/ms1504-offline')):
+    cfg = recovery_config(m, base)
+    with mounted(m, cfg['root'], Path('/run/ms1504-target')) as target:
+        active = active_config(m, target, base, cfg)
+        m.validate_root_identity(m.parse_fields(target / 'etc/ms1504-root-identity'), active)
+        m.check_policy({**active, 'boot_dir': target / 'boot'}, target=target)
+        report = m.merge_report(active)
+        if any(row['lv_merging'].strip() or row['lv_attr'].startswith(('O', 'S')) for row in report):
+            raise RecoveryPendingError('LVM still reports an unfinished merge; inspect it before another rollback.')
+        state = target / active['state_dir'].relative_to('/')
+        rows = m.retained_transactions({**active, 'state_dir': state})
+        pending = state / 'pending/transaction'
+        if pending.exists():
+            rows.insert(0, m.parse_fields(pending))
+        m.need(m.actual_root_snapshots(active) == {row['snapshot'] for row in rows},
+               'snapshot inventory differs from recovery receipts; inspect before continuing')
+        choices = []
+        for index, row in enumerate(rows):
+            reason = '' if index == 0 else 'boot-only; permanent merge currently supports the newest checkpoint'
+            try:
+                percent, _ = m.snapshot_health(active, row['snapshot'])
+                m.need(percent < active['snapshots']['maximum_data_percent'], 'snapshot reached COW safety threshold')
+                actual_uuid = m.run(['lvs', '--noheadings', '-o', 'lv_uuid',
+                                     '/dev/' + active['vg'] + '/' + row['snapshot']]).decode().strip()
+                m.need(not row.get('snapshot_uuid') or row['snapshot_uuid'] == actual_uuid, 'snapshot UUID changed')
+            except (RuntimeError, OSError) as exc:
+                reason = str(exc)
+            if (state / 'signing-migration').exists() or (state / 'recovery-preparation.json').exists():
+                reason = 'finish the interrupted signing/recovery preparation first'
+            choices.append(dict(generation=row['old'], eligible=not reason, reason=reason,
+                                signed=m.signed(active)))
+        return choices
+
+
+def recovery_menu(m, *, base=Path('/etc/ms1504-offline'), signed_key=None, read=input):
+    while True:
+        choices = rollback_choices(m, base=base)
+        print('\nPermanent root rollback — /home and /extra are kept.')
+        for index, choice in enumerate(choices, 1):
+            note = 'available' if choice['eligible'] else choice['reason']
+            print(f"  {index}) {choice['generation']} ({note})")
+        if not choices:
+            print('  No retained checkpoints are available.')
+        print('  0) Reboot without rolling back')
+        try:
+            selection = read('Choose a checkpoint [0]: ').strip().lower()
+            if selection in ('', '0', 'none', 'q'):
+                return
+            if not selection.isdecimal() or not 1 <= int(selection) <= len(choices):
+                print('Choose one of the listed numbers.')
+                continue
+            choice = choices[int(selection) - 1]
+            if not choice['eligible']:
+                print(choice['reason'])
+                continue
+            key = signed_key
+            if choice['signed'] and not key:
+                key = read('Encrypted signing-key file on unlocked signing storage (blank cancels): ').strip()
+                if not key:
+                    continue
+            offline(m, choice['generation'], base=base, signed_key=key, interactive_menu=True)
+        except RecoveryPendingError:
+            raise
+        except (RuntimeError, OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
+            print('Rollback was not started or was cancelled: ' + str(exc))
+            continue
+        except (EOFError, KeyboardInterrupt):
+            print('\nSelection cancelled.')
+            return
+        print('Permanent rollback completed. Rebooting into the normal root.')
+        return
+
+
+def offline(m, generation, *, base=Path('/etc/ms1504-offline'), signed_key=None, interactive_menu=False):
+    cfg = recovery_config(m, base)
+    m.need(m.NAME.fullmatch(generation), 'invalid generation name')
+    storage = json.loads((base / 'storage.json').read_text())
+    target = Path('/run/ms1504-target')
+    receipts = Path('/run/ms1504-receipts')
+    home = Path('/run/ms1504-home-check')
+    # Preserve images and markers. Do not swapoff or erase anything implicitly.
+    m.need(m.run(['blkid', '-p', '-s', 'TYPE', '-o', 'value',
+                  f"/dev/{cfg['vg']}/{cfg['system']['swap_lv']}"]).decode().strip() == 'swap',
+           'hibernation image or unknown swap state; preserve it and stop')
+    with mounted(m, f"/dev/{cfg['vg']}/{cfg['system']['home_lv']}", home):
+        marker = home / '.ms1504-hibernate/hibernation-pending'
+        m.need(not marker.exists() and not marker.is_symlink(), 'resolve the persistent hibernation marker first')
+    uncertain = False
+    operation = None
+    unsafe = lambda: uncertain or bool(operation and getattr(operation, 'merge_started', False))
+    with mounted(m, cfg['root'], target, 'ro', unsafe=unsafe):
+        active = active_config(m, target, base, cfg)
+        filesystem = unlock_storage(m, target, storage)
+        verify_checkpoint_storage(m, target, active, generation)
+        with mounted(m, filesystem, receipts, 'rw', keep=lambda: uncertain, unsafe=unsafe):
+            storage_identity(m, active, receipts)
+            m.need(m.run(['blkid', '-p', '-s', 'UUID', '-o', 'value', filesystem]).decode().strip() == storage['filesystem_uuid'],
+                   'recovery filesystem differs')
+            if m.signed(active):
+                m.need(signed_key, 'signed recovery requires --secret-key-file on separately unlocked signing storage')
+            operation = argparse.Namespace(generation=generation, recovery_root=str(target), recovery_receipts=str(receipts),
+                                           secret_key_file=signed_key, gnupg_home=None,
+                                           installed_config='etc/ms1504-generation.toml', interactive_menu=interactive_menu)
+            try:
+                m.command_merge_rollback(active, operation)
+            except (Exception, KeyboardInterrupt) as exc:
+                if getattr(operation, 'merge_started', False) or (receipts / ('merge-pending-' + generation)).exists():
+                    uncertain = True
+                    raise RecoveryPendingError('A merge intent exists. Receipts remain at ' + str(receipts) +
+                                               '; inspect LVM before retrying or booting root. ' + str(exc)) from exc
+                raise
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('generation')
+    parser.add_argument('generation', nargs='?')
+    parser.add_argument('--menu', action='store_true', help='choose a checkpoint interactively; returning requests reboot')
     parser.add_argument('--secret-key-file')
     args = parser.parse_args()
+    if bool(args.generation) == args.menu:
+        parser.error('choose --menu or one generation name')
     spec = spec_from_file_location('offline_generations', SOURCE / 'signed-generation.py')
     manager = module_from_spec(spec)
     spec.loader.exec_module(manager)
@@ -302,8 +415,11 @@ def main():
     fd = os.open(manager.LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         manager.fcntl.flock(fd, manager.fcntl.LOCK_EX | manager.fcntl.LOCK_NB)
-        offline(manager, args.generation, signed_key=args.secret_key_file)
-        print('Permanent rollback completed. Reboot into the normal root entry; do not continue this boot.')
+        if args.menu:
+            recovery_menu(manager, signed_key=args.secret_key_file)
+        else:
+            offline(manager, args.generation, signed_key=args.secret_key_file)
+            print('Permanent rollback completed. Reboot into the normal root entry; do not continue this boot.')
     finally:
         os.close(fd)
 

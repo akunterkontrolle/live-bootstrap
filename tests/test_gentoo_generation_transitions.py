@@ -285,7 +285,8 @@ class InternalRecovery(unittest.TestCase):
                            ' n=0; [ ! -f "$TEST_COUNT" ] || n=$(cat "$TEST_COUNT")\n'
                            ' n=$((n+1)); echo "$n" > "$TEST_COUNT"\n'
                            ' [ "$n" -lt 2 ] || exit 67\n'
-                           ' return 0\n}\n')
+                           ' return 1\n}\n'
+                           'sync() { :; }\nreboot() { exit 68; }\n')
         hook = (GENTOO / 'dracut-ms1504-rollback/recover.sh').read_text()
         hook = hook.replace('/lib/dracut-lib.sh', str(library)).replace('/dev/console', str(self.root / 'console'))
         sentinel = self.root / 'normal-boot'
@@ -295,6 +296,98 @@ class InternalRecovery(unittest.TestCase):
         self.assertEqual(result.returncode, 67, result.stderr)
         self.assertEqual(count.read_text().strip(), '2')
         self.assertFalse(sentinel.exists())
+
+    def test_menu_retries_invalid_choice_and_cancelled_confirmation(self):
+        choices = [dict(generation='newest', eligible=True, signed=False, reason=''),
+                   dict(generation='older', eligible=False, signed=False, reason='boot-only')]
+        answers = iter(['wrong', '2', '1', '1'])
+        with patch.object(r, 'rollback_choices', return_value=choices), \
+                patch.object(r, 'offline', side_effect=[RuntimeError('confirmation did not match'), None]) as offline:
+            r.recovery_menu(self.manager, read=lambda _: next(answers))
+        self.assertEqual(offline.call_count, 2)
+        self.assertTrue(all(call.kwargs['interactive_menu'] for call in offline.call_args_list))
+
+    def test_hook_reboots_after_menu_success_or_cancel(self):
+        library = self.root / 'dracut-lib.sh'
+        log = self.root / 'actions'
+        library.write_text('getargbool() { return 0; }\nsetsid() { return 0; }\n'
+                           'sync() { echo sync >> "$TEST_LOG"; }\n'
+                           'reboot() { echo reboot >> "$TEST_LOG"; exit 69; }\n')
+        hook = (GENTOO / 'dracut-ms1504-rollback/recover.sh').read_text()
+        hook = hook.replace('/lib/dracut-lib.sh', str(library)).replace('/dev/console', str(self.root / 'console'))
+        result = subprocess.run(['sh'], input=hook, text=True, capture_output=True, timeout=5,
+                                env={**os.environ, 'TEST_LOG': str(log)})
+        self.assertEqual(result.returncode, 69, result.stderr)
+        self.assertEqual(log.read_text().splitlines(), ['sync', 'reboot'])
+
+    def test_menu_none_requests_reboot_without_a_merge(self):
+        with patch.object(r, 'rollback_choices', return_value=[]), patch.object(r, 'offline') as offline:
+            r.recovery_menu(self.manager, read=lambda _: 'none')
+        offline.assert_not_called()
+
+    def test_menu_does_not_retry_after_a_durable_merge_intent(self):
+        choices = [dict(generation='newest', eligible=True, signed=False, reason='')]
+        with patch.object(r, 'rollback_choices', return_value=choices), \
+                patch.object(r, 'offline', side_effect=r.RecoveryPendingError('merge intent exists')) as offline:
+            with self.assertRaises(r.RecoveryPendingError):
+                r.recovery_menu(self.manager, read=lambda _: '1')
+        self.assertEqual(offline.call_count, 1)
+
+    def test_cancelled_attempt_cleans_owned_mounts_and_can_retry(self):
+        state = {}
+        target = self.root / 'mounted'
+        source = '/dev/test-recovery'
+        def run(command):
+            if command[0] == 'mount':
+                self.assertNotIn(str(target), state)
+                state[str(target)] = (source, 'ext4', command[command.index('-o') + 1])
+            elif command[0] == 'umount':
+                state.pop(command[1])
+            elif command[0] == 'findmnt':
+                fields = dict(zip(('SOURCE', 'FSTYPE', 'OPTIONS'), state[str(target)]))
+                return fields[command[-1]].encode()
+            else:
+                self.fail(str(command))
+            return b''
+        self.manager.run = run
+        with patch.object(r.os.path, 'ismount', side_effect=lambda path: str(path) in state):
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, 'confirmation'):
+                    with r.mounted(self.manager, source, target, 'rw'):
+                        raise RuntimeError('confirmation did not match')
+                self.assertFalse(state)
+            # Adopt the matching mount left behind by the previous image.
+            state[str(target)] = (source, 'ext4', 'rw,relatime')
+            with r.mounted(self.manager, source, target, 'rw'):
+                self.assertTrue(state)
+            self.assertFalse(state)
+
+    def test_unrelated_existing_mount_is_never_unmounted(self):
+        target = self.root / 'other'
+        def run(command):
+            fields = {'SOURCE': '/dev/other-disk', 'FSTYPE': 'ext4', 'OPTIONS': 'ro'}
+            self.assertEqual(command[0], 'findmnt')
+            return fields[command[-1]].encode()
+        self.manager.run = run
+        with patch.object(r.os.path, 'ismount', return_value=True):
+            with self.assertRaisesRegex(RuntimeError, 'unexpected existing'):
+                with r.mounted(self.manager, '/dev/expected', target):
+                    self.fail('unexpected mount was accepted')
+
+    def test_cleanup_error_after_merge_intent_is_not_treated_as_retryable(self):
+        target = self.root / 'after-merge'
+        state = set()
+        def run(command):
+            if command[0] == 'mount':
+                state.add(str(target))
+                return b''
+            self.assertEqual(command[0], 'umount')
+            raise RuntimeError('device busy')
+        self.manager.run = run
+        with patch.object(r.os.path, 'ismount', side_effect=lambda path: str(path) in state):
+            with self.assertRaises(r.RecoveryPendingError):
+                with r.mounted(self.manager, '/dev/test', target, 'rw', unsafe=lambda: True):
+                    pass
 
     def test_recovery_storage_rejects_any_target_vg_ancestor(self):
         def run(command):
@@ -333,6 +426,45 @@ class InternalRecovery(unittest.TestCase):
             self.assertEqual(run.call_args.args[0], ['umount', str(checkpoint)])
             historical_key.write_bytes(self.key.read_bytes())
             r.verify_checkpoint_storage(self.manager, self.root, cfg, 'base-1')
+
+
+class MergeCompletion(unittest.TestCase):
+    cfg = {'vg': 'ms1504', 'root': '/dev/ms1504/root', 'system': {'root_lv': 'root'}}
+
+    def report(self, merging=True, uuid='snapshot-id'):
+        rows = [dict(lv_name='root', lv_uuid='root-id', lv_attr='Owi-aos---' if merging else 'owi-a-s---',
+                     lv_merging='merging' if merging else '', origin='')]
+        if merging:
+            rows.append(dict(lv_name='[root_rollback_base]', lv_uuid=uuid,
+                             lv_attr='Swi-aos---', lv_merging='merging', origin='root'))
+        return json.dumps({'report': [{'lv': rows}]}).encode()
+
+    def test_hidden_snapshot_and_merging_origin_must_disappear_before_completion(self):
+        reports = iter([self.report(), self.report(), self.report(False)])
+        calls = []
+        def run(command):
+            calls.append(command)
+            return next(reports) if command[0] == 'lvs' else b''
+        with patch.object(m, 'run', side_effect=run), patch.object(m.time, 'sleep') as sleep:
+            m.wait_snapshot_merge(self.cfg, 'root_rollback_base', 'snapshot-id', timeout=5)
+        self.assertEqual(calls[0], ['lvchange', '--poll', 'y', '/dev/ms1504/root'])
+        self.assertEqual(sleep.call_count, 2)
+        self.assertTrue(all('--all' in call for call in calls if call[0] == 'lvs'))
+
+    def test_hidden_merge_times_out_even_when_device_node_has_disappeared(self):
+        with patch.object(m, 'run', side_effect=lambda command: self.report() if command[0] == 'lvs' else b''), \
+                patch.object(m.time, 'monotonic', side_effect=[0, 2]):
+            with self.assertRaisesRegex(RuntimeError, 'cleanup did not complete'):
+                m.wait_snapshot_merge(self.cfg, 'root_rollback_base', 'snapshot-id', timeout=1)
+
+    def test_replaced_hidden_snapshot_refuses_completion(self):
+        with patch.object(m, 'run', side_effect=lambda command: self.report(uuid='changed') if command[0] == 'lvs' else b''):
+            with self.assertRaisesRegex(RuntimeError, 'UUID changed'):
+                m.wait_snapshot_merge(self.cfg, 'root_rollback_base', 'snapshot-id')
+
+    def test_inventory_counts_hidden_merging_snapshot(self):
+        with patch.object(m, 'run', return_value=b'[root_rollback_base] root\nroot\n'):
+            self.assertEqual(m.actual_root_snapshots(self.cfg), {'root_rollback_base'})
 
 
 class RecoveryPublication(unittest.TestCase):
